@@ -1,0 +1,189 @@
+###############################################################################
+# Haku VR Museum — repo root ignore rules.
+#
+# One file covers the whole repo: the Unity project under unity/ and the Python
+# service under ai-service/.
+#
+# 🚨 ANCHORING, READ THIS BEFORE EDITING. GitHub's canonical Unity.gitignore
+# uses leading-slash patterns (/[Ll]ibrary/) that anchor to the directory
+# holding the .gitignore. Pasted at a repo root those NEVER match
+# unity/Library/, and someone pushes a multi-gigabyte Library folder. Every
+# Unity pattern below is therefore written WITHOUT a leading slash, so it
+# matches at any depth. Once unity/ exists, prove it:
+#
+#     git check-ignore -v unity/Library/ArtifactDB
+#
+# That must print a matching rule. Silence means this file is broken.
+###############################################################################
+
+# ---------------------------------------------------------------------------
+# Unity 6000.5.5f1 — generated caches, imports and build output
+# ---------------------------------------------------------------------------
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+ExportedObj/
+crashlytics-build.properties
+
+# Burst / IL2CPP / Addressables intermediates
+[Bb]urst[Dd]ebug*/
+[Ii]l2[Cc]pp*/
+unity/Assets/AssetStoreTools*
+unity/Assets/StreamingAssets/aa/
+unity/Assets/StreamingAssets/aa.meta
+
+# Android build artefacts — hand builds over as a GitHub Release, never a commit.
+# A Quest APK is 150–500 MB and changes every build.
+*.apk
+*.aab
+
+# --- DO COMMIT these, they are small and load-bearing. Never add them above ---
+#   unity/Assets/XR/                    XR loader config
+#   unity/Packages/manifest.json
+#   unity/Packages/packages-lock.json   pins the XR package graph for all six of us
+#   unity/ProjectSettings/              including ProjectVersion.txt (everyone on 6000.5.5f1)
+#   every .meta file                    GUIDs; lose them and every reference breaks
+
+# ---------------------------------------------------------------------------
+# IDE / generated solution files
+# ---------------------------------------------------------------------------
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.opendb
+*.VC.db
+*.tmp
+.vs/
+.idea/
+.consulo/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+
+# Compiler symbol output. NOTE: .gitattributes routes *.pdb / *.mdb to LFS for
+# the rare hand-added native plugin symbol file. .gitignore wins, so those can
+# only ever reach LFS via a deliberate `git add -f`. That is intended.
+*.pdb
+*.mdb
+
+# ---------------------------------------------------------------------------
+# Secrets and signing material — never commit
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.jks
+
+# ---------------------------------------------------------------------------
+# Merge-tool leftovers (SmartMerge writes these)
+# ---------------------------------------------------------------------------
+*.orig
+*.rej
+*.BACKUP.*
+*.BASE.*
+*.LOCAL.*
+*.REMOTE.*
+
+# ---------------------------------------------------------------------------
+# OS / editor noise
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# ---------------------------------------------------------------------------
+# Python — ai-service/
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# 🚨 MODEL WEIGHTS — NEVER COMMIT. Read this before you "just add one file".
+#
+# WHY: GitHub's Git LFS free tier is 10 GiB of STORAGE and 10 GiB of BANDWIDTH
+# per month, billed to the repo OWNER. GitHub Pro does NOT raise it, so the
+# Student Developer Pack is not a way out.
+#
+# Storage counts HISTORY. A weight file committed once is charged forever, even
+# after you delete it; undoing it means `git lfs migrate import --everything`
+# plus a force-push that rewrites history for all six of us.
+#
+# The two overages fail completely differently, and STORAGE is the silent one:
+#   STORAGE exceeded  -> clones still SUCCEED but hand out ~130-byte pointer
+#                        files instead of assets. Unity imports garbage,
+#                        materials go magenta, meshes vanish, pushes are
+#                        refused. People conclude the repo is broken and
+#                        re-clone, which then burns bandwidth too.
+#   BANDWIDTH exceeded -> `git lfs pull` errors outright. At least it is loud.
+#
+# Sizes actually in play here: qwen3:8b is 5.2 GB (it lives in Ollama's own
+# store, not in this repo), en_US-lessac-medium.onnx is 63 MB, whisper /
+# CTranslate2 weights run 75 MB to 1.5 GB. One 1.5 GB file is 15% of the team's
+# entire permanent allowance.
+#
+# Everyone fetches these locally instead — see docs/SETUP.md.
+# ---------------------------------------------------------------------------
+*.gguf
+*.safetensors
+*.pt
+*.pth
+ggml-*.bin
+model.bin
+ai-service/voices/
+ai-service/models/
+unity/Assets/StreamingAssets/models/
+
+# Piper voices are an .onnx PLUS an .onnx.json sidecar; both are required at
+# runtime and neither belongs in git. This also blocks any Unity Sentis .onnx —
+# if M5 ever genuinely needs a small on-device net, add a targeted negation
+# (!unity/Assets/_Project/Models/foo.onnx) rather than deleting these two lines.
+*.onnx
+*.onnx.json
+
+# ---------------------------------------------------------------------------
+# AI service runtime scratch
+# ---------------------------------------------------------------------------
+ai-service/logs/
+ai-service/tmp/
+# /converse writes _incoming.wav on every request, and /say output is disposable.
+ai-service/**/*.wav
+!ai-service/tests/fixtures/*.wav
+*.log
+.utmp/
+.utmp/
+Builds/
+*_BurstDebugInformation_DoNotShip/
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]serSettings/

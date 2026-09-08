@@ -1,0 +1,23 @@
+{
+  "id": "bronze-mirror-01",
+  "title": "Tang Dynasty Bronze Mirror",
+  "intro": "This is a bronze mirror, cast in China about twelve hundred years ago. The side facing you is the decorated back. The other side was polished until it reflected.",
+  "date": "8th century CE",
+  "culture": "Tang Dynasty, China",
+  "materials": "High-tin bronze, cast in a two-piece mould",
+  "dimensions": "21.5 cm diameter, 0.8 cm thick, 1.2 kg",
+  "provenance": "Excavated from a tomb near Xi'an, Shaanxi province, in 1955. Held in a museum collection since 1961.",
+  "facts": [
+    "The polished face was the working mirror. The decorated side faced away from the user.",
+    "The design shows lions among grapevines, a motif that arrived in China along the Silk Road from Central Asia and Persia.",
+    "The high tin content made the polished surface unusually bright and silvery, but it also made the metal brittle and easy to crack.",
+    "Mirrors like this were often placed in tombs, where they were believed to protect the dead and light the way.",
+    "The central boss has a hole through it, so a silk cord could be threaded and the mirror hung or carried.",
+    "Tang mirrors were frequently given as imperial gifts, and some carry inscriptions naming an occasion."
+  ],
+  "unknown": "The specific workshop that cast this mirror is not recorded, nor the name of its owner. Whether the lion motif carried a protective meaning in China, or was purely decorative, is still debated by scholars.",
+  "sources": [
+    "PLACEHOLDER - Mahir to replace with real citations before the final report.",
+    "Each fact above must be traceable to a published source."
+  ]
+}
