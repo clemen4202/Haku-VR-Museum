@@ -19,10 +19,8 @@
 #   git check-attr filter -- unity/Assets/test.fbx        -> filter: lfs
 #   git check-attr diff   -- unity/Packages/packages-lock.json -> diff: unset
 ###############################################################################
-
 # --- 1. Line-ending normalisation -------------------------------------------
 * text=auto
-
 # --- 2. Unity YAML: TEXT, LF, routed through Unity SmartMerge. NEVER LFS. ----
 # Scenes and prefabs must stay plain text or diff, merge and code review all
 # die. `lockable` works without filter=lfs and is what makes `git lfs lock`
@@ -41,7 +39,6 @@
 *.mixer              text eol=lf merge=unityyamlmerge
 *.preset             text eol=lf merge=unityyamlmerge
 *.meta               text eol=lf merge=unityyamlmerge
-
 # --- 3. Source and config: text, no LFS -------------------------------------
 *.cs          text eol=lf diff=csharp
 *.shader      text eol=lf
@@ -62,7 +59,6 @@
 *.ps1         text eol=crlf
 *.bat         text eol=crlf
 *.cmd         text eol=crlf
-
 # --- 4. Git LFS: genuine binaries only --------------------------------------
 # 3D models
 *.fbx    filter=lfs diff=lfs merge=lfs -text
@@ -72,7 +68,6 @@
 # .gltf is technically JSON, but it is meaningless without its .bin/.glb
 # payload and nobody will ever read its diff. Kept beside the binary on purpose.
 *.gltf   filter=lfs diff=lfs merge=lfs -text
-
 # Textures / images
 *.png    filter=lfs diff=lfs merge=lfs -text
 *.PNG    filter=lfs diff=lfs merge=lfs -text
@@ -82,16 +77,13 @@
 *.tga    filter=lfs diff=lfs merge=lfs -text
 *.TGA    filter=lfs diff=lfs merge=lfs -text
 *.psd    filter=lfs diff=lfs merge=lfs -text
-
 # Audio
 *.wav    filter=lfs diff=lfs merge=lfs -text
 *.WAV    filter=lfs diff=lfs merge=lfs -text
 *.mp3    filter=lfs diff=lfs merge=lfs -text
 *.ogg    filter=lfs diff=lfs merge=lfs -text
-
 # Unity packages
 *.unitypackage filter=lfs diff=lfs merge=lfs -text
-
 # Native libraries and plugin symbols.
 # NOTE: *.pdb and *.mdb are .gitignore'd (they are IL2CPP / Visual Studio
 # output). .gitignore wins over .gitattributes, so these rules only ever apply
@@ -101,11 +93,9 @@
 *.a      filter=lfs diff=lfs merge=lfs -text
 *.mdb    filter=lfs diff=lfs merge=lfs -text
 *.pdb    filter=lfs diff=lfs merge=lfs -text
-
 # DELIBERATELY NOT TRACKED: *.onnx and *.onnx.json. Those are Piper voice
 # weights and they are .gitignore'd — routing them into LFS would be an
 # invitation to commit 63 MB of model per voice.
-
 # --- 5. Suppress diff noise on generated lock files -------------------------
 # Bare filename, NO leading slash. A slashed path would anchor to the repo root
 # and silently never match unity/Packages/packages-lock.json.
