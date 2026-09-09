@@ -6,6 +6,9 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
+    path: Assets/Scenes/BrickMuseum_VR.unity
+    guid: 7324e4726d977464282bccbb0566388a
+  - enabled: 1
     path: Assets/Scenes/Museum_Greybox.unity
     guid: b5343e5a2f4fc9e458a301122f40a354
   m_configObjects:
