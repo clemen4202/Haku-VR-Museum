@@ -13,7 +13,7 @@ using UnityEditor;
 
 public static class MuseumDoors
 {
-    const float GAP    = 3.0f;    // doorway width, matches MuseumBuilder
+    const float GAP = 3.0f;    // doorway width, matches MuseumBuilder
     const float LEAF_H = 2.55f;   // door height
     const float WALL_T = 0.3f;
 
@@ -35,9 +35,9 @@ public static class MuseumDoors
         if (old != null) Object.DestroyImmediate(old);
         var root = new GameObject("MuseumDoors").transform;
 
-        var woodMat  = Mat("M_DoorWood",  new Color(0.24f, 0.14f, 0.09f), 0f,   0.30f);
+        var woodMat = Mat("M_DoorWood", new Color(0.24f, 0.14f, 0.09f), 0f, 0.30f);
         var brassMat = Mat("M_DoorBrass", new Color(0.72f, 0.57f, 0.24f), 0.8f, 0.60f);
-        var stoneMat = Mat("M_Lintel",    new Color(0.30f, 0.29f, 0.27f), 0f,   0.15f);
+        var stoneMat = Mat("M_Lintel", new Color(0.30f, 0.29f, 0.27f), 0f, 0.15f);
 
         // ENTRY: Room 1 south wall, centred on x = -13, at z = -10
         Doorway(root, doorType, "Entry Door", new Vector3(-13f, 0f, -10f), 0f,
@@ -57,7 +57,7 @@ public static class MuseumDoors
     {
         var group = new GameObject(label).transform;
         group.SetParent(root);
-        group.position    = centre;
+        group.position = centre;
         group.eulerAngles = new Vector3(0f, yaw, 0f);
 
         // stone lintel filling the wall above the doors
@@ -65,7 +65,7 @@ public static class MuseumDoors
         lintel.name = "Lintel";
         lintel.transform.SetParent(group);
         lintel.transform.localPosition = new Vector3(0f, LEAF_H + (4f - LEAF_H) * 0.5f, 0f);
-        lintel.transform.localScale    = new Vector3(GAP + 0.06f, 4f - LEAF_H, WALL_T + 0.02f);
+        lintel.transform.localScale = new Vector3(GAP + 0.06f, 4f - LEAF_H, WALL_T + 0.02f);
         lintel.transform.localRotation = Quaternion.identity;
         lintel.GetComponent<Renderer>().sharedMaterial = stone;
 
@@ -89,7 +89,7 @@ public static class MuseumDoors
         leaf.name = "Leaf";
         leaf.transform.SetParent(hinge.transform);
         leaf.transform.localPosition = new Vector3(-side * half * 0.5f, LEAF_H * 0.5f, 0f);
-        leaf.transform.localScale    = new Vector3(half - 0.02f, LEAF_H, 0.08f);
+        leaf.transform.localScale = new Vector3(half - 0.02f, LEAF_H, 0.08f);
         leaf.transform.localRotation = Quaternion.identity;
         leaf.GetComponent<Renderer>().sharedMaterial = wood;
 
@@ -98,16 +98,16 @@ public static class MuseumDoors
         handle.name = "Handle";
         handle.transform.SetParent(hinge.transform);
         handle.transform.localPosition = new Vector3(-side * 0.22f, 1.05f, 0.07f);
-        handle.transform.localScale    = new Vector3(0.05f, 0.22f, 0.05f);
+        handle.transform.localScale = new Vector3(0.05f, 0.22f, 0.05f);
         handle.transform.localRotation = Quaternion.identity;
         handle.GetComponent<Renderer>().sharedMaterial = brass;
         Object.DestroyImmediate(handle.GetComponent<Collider>());
 
         var comp = hinge.AddComponent(doorType);
         var so = new SerializedObject(comp);
-        so.FindProperty("doorName").stringValue  = label.ToLower();
-        so.FindProperty("openAngle").floatValue  = side < 0 ? -95f : 95f;
-        so.FindProperty("speed").floatValue      = 260f;
+        so.FindProperty("doorName").stringValue = label.ToLower();
+        so.FindProperty("openAngle").floatValue = side < 0 ? -95f : 95f;
+        so.FindProperty("speed").floatValue = 260f;
         so.ApplyModifiedPropertiesWithoutUndo();
     }
 
@@ -135,4 +135,53 @@ public static class MuseumDoors
         AssetDatabase.SaveAssets();
         return mat;
     }
+
+    //     {
+    //     const string materialsFolder = "Assets/Materials";
+
+    //     if (!AssetDatabase.IsValidFolder(materialsFolder))
+    //     {
+    //         AssetDatabase.CreateFolder("Assets", "Materials");
+    //     }
+
+    // string materialPath = $"{materialsFolder}/{name}.mat";
+
+    // string preferredShader = urp
+    //     ? "Universal Render Pipeline/Lit"
+    //     : "Standard";
+
+    // string fallbackShader = urp
+    //     ? "Standard"
+    //     : "Universal Render Pipeline/Lit";
+
+    // Shader selectedShader =
+    //     Shader.Find(preferredShader) ?? Shader.Find(fallbackShader);
+
+    // bool usesUrpShader =
+    //     selectedShader != null &&
+    //     selectedShader.name.StartsWith("Universal");
+
+    // Material material =
+    //     AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+
+    // if (material == null)
+    // {
+    //     material = new Material(selectedShader);
+    //     AssetDatabase.CreateAsset(material, materialPath);
+    // }
+
+    // material.shader = selectedShader;
+
+    // string colorProperty = usesUrpShader ? "_BaseColor" : "_Color";
+    // string smoothnessProperty = usesUrpShader ? "_Smoothness" : "_Glossiness";
+
+    // material.SetColor(colorProperty, col);
+    // material.SetFloat("_Metallic", metallic);
+    // material.SetFloat(smoothnessProperty, smoothness);
+
+    // EditorUtility.SetDirty(material);
+    // AssetDatabase.SaveAssets();
+
+    // return material;
+    // }
 }
