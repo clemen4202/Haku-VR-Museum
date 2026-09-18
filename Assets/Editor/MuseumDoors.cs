@@ -150,16 +150,6 @@ public static class MuseumDoors
     //     ? "Universal Render Pipeline/Lit"
     //     : "Standard";
 
-    // string fallbackShader = urp
-    //     ? "Standard"
-    //     : "Universal Render Pipeline/Lit";
-
-    // Shader selectedShader =
-    //     Shader.Find(preferredShader) ?? Shader.Find(fallbackShader);
-
-    // bool usesUrpShader =
-    //     selectedShader != null &&
-    //     selectedShader.name.StartsWith("Universal");
 
     // Material material =
     //     AssetDatabase.LoadAssetAtPath<Material>(materialPath);

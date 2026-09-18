@@ -136,4 +136,27 @@ public static class HakuOpenXRFeatures
     {
         if (Application.isBatchMode) EditorApplication.Exit(code);
     }
+
+            // {
+            //     var feature = getById.Invoke(null, new object[] { BuildTargetGroup.Android, id });
+            //     if (feature == null)
+            //     {
+            //         problems.Add(id + " (not present in this OpenXR version)");
+            //         continue;
+            //     }
+
+            //     var so = new SerializedObject((UnityEngine.Object)feature);
+            //     var prop = so.FindProperty("m_enabled") ?? so.FindProperty("enabled");
+            //     if (prop == null)
+            //     {
+            //         problems.Add(id + " (no enabled property)");
+            //         continue;
+            //     }
+
+            //     prop.boolValue = true;
+            //     so.ApplyModifiedPropertiesWithoutUndo();
+            //     EditorUtility.SetDirty((UnityEngine.Object)feature);
+            //     enabled++;
+            //     Debug.Log("[HakuOpenXR] enabled " + id);
+            // }
 }
