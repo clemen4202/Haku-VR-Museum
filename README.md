@@ -8,7 +8,7 @@ AI-Powered VR Museum Experience
 
 ## Team Members
 
-| Member | Role | 
+| Member | Role | GitHub |
 |---|---|---|
 | Clemen | Team Leader / Project Manager | 
 | Sneha | VR Developer | 
