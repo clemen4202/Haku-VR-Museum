@@ -17,7 +17,11 @@
 //
 //  OPTIONAL runtime scripts. If these are in Assets/Scripts/ they get wired up;
 //  if not, the museum still builds and just logs that it skipped them:
-//      Inspectable.cs, InspectController.cs, DoorInteract.cs
+//      Inspectable.cs, InspectController.cs, DoorInteract.cs,
+//      SimpleFPS.cs, RigSelector.cs
+//
+//  TWO RIGS are built. RigSelector picks one on Play: the VR rig when a headset
+//  is running, otherwise the desktop 'Player' (WASD, mouse, E to interact).
 //
 // -----------------------------------------------------------------------------
 //  PLAN  (+X right, +Z up the page)
@@ -206,7 +210,9 @@ public static class BrickMuseumVR
         BuildDoors();
         BuildLighting();
         BuildExhibits();
-        BuildRig();
+        GameObject xrRig   = BuildRig();
+        GameObject desktop = BuildDesktopRig();
+        WireRigSelector(xrRig, desktop);
 
         EditorSceneManager.MarkSceneDirty(scene);
         if (!EditorSceneManager.SaveScene(scene, ScenePath))
@@ -605,7 +611,7 @@ public static class BrickMuseumVR
     //  VR RIG
     // =========================================================================
 
-    static void BuildRig()
+    static GameObject BuildRig()
     {
         // If the XRI Starter Assets rig is already in the scene it is far better
         // than anything built here - controllers, ray interactors and teleport are
@@ -615,7 +621,7 @@ public static class BrickMuseumVR
         {
             starter.transform.SetPositionAndRotation(Spawn, Quaternion.identity);
             Log("Found the XRI Starter Assets rig and moved it to the entry porch.");
-            return;
+            return starter;
         }
 
         Type xrOrigin = FindType("Unity.XR.CoreUtils.XROrigin");
@@ -632,7 +638,7 @@ public static class BrickMuseumVR
             flatCam.transform.SetParent(rig.transform, false);
             flatCam.transform.localPosition = new Vector3(0f, 1.6f, 0f);
             ConfigureCamera(flatCam);
-            return;
+            return rig;
         }
 
         var offset = new GameObject("Camera Offset");
@@ -661,6 +667,76 @@ public static class BrickMuseumVR
         WireHeadTracking(camGo);
         Log("XR rig built at the entry porch. HEAD-TRACKED ONLY - use the Starter Assets " +
             "prefab for controllers and teleport.");
+        return rig;
+    }
+
+    /// Keyboard-and-mouse player for testing in the Editor and for recording the
+    /// demo video: WASD to walk, mouse to look, E to inspect exhibits and open doors.
+    /// RigSelector switches it on only when no headset is running, so it is inert
+    /// in the Quest build.
+    ///
+    /// It must be a ROOT object. InspectController finds SimpleFPS through
+    /// transform.root to freeze movement while you inspect - under BRICK_MUSEUM_VR
+    /// the root would be the museum and that lookup would silently fail.
+    static GameObject BuildDesktopRig()
+    {
+        Type fps     = FindType("SimpleFPS, Assembly-CSharp");
+        Type inspect = FindType("InspectController, Assembly-CSharp");
+        if (fps == null || inspect == null)
+        {
+            Debug.LogWarning("[BrickMuseum] SimpleFPS / InspectController not found in Assets/Scripts/ - " +
+                             "no desktop player built, so E-to-interact will not work in the Editor.");
+            return null;
+        }
+
+        var player = new GameObject("Player");   // root on purpose - see above
+        player.transform.SetPositionAndRotation(Spawn + Vector3.up * 0.05f, Quaternion.identity);
+
+        var cc = player.AddComponent<CharacterController>();
+        cc.height = 1.8f;
+        cc.radius = 0.35f;
+        cc.center = new Vector3(0f, 0.9f, 0f);
+
+        // Named PlayerCamera and a DIRECT child: SimpleFPS finds it with transform.Find.
+        var camGo = new GameObject("PlayerCamera");
+        camGo.transform.SetParent(player.transform, false);
+        camGo.transform.localPosition = new Vector3(0f, 1.65f, 0f);
+        camGo.tag = "MainCamera";
+
+        var cam = camGo.AddComponent<Camera>();
+        cam.clearFlags      = CameraClearFlags.SolidColor;
+        cam.backgroundColor = Color.black;
+        cam.nearClipPlane   = 0.05f;
+        cam.farClipPlane    = 120f;
+        camGo.AddComponent<AudioListener>();
+        camGo.AddComponent(inspect);        // this is what listens for E
+
+        player.AddComponent(fps);
+        player.SetActive(false);            // RigSelector decides at runtime
+        return player;
+    }
+
+    static void WireRigSelector(GameObject xrRig, GameObject desktop)
+    {
+        if (desktop == null) return;
+
+        Type sel = FindType("RigSelector, Assembly-CSharp");
+        if (sel == null)
+        {
+            // No selector: favour the desktop rig so the scene is at least testable.
+            if (xrRig != null) xrRig.SetActive(false);
+            desktop.SetActive(true);
+            Debug.LogWarning("[BrickMuseum] RigSelector.cs not found - desktop Player forced ON, " +
+                             "VR rig OFF. Add Assets/Scripts/RigSelector.cs before building to the Quest.");
+            return;
+        }
+
+        var so = new SerializedObject(s_Root.gameObject.AddComponent(sel));
+        so.FindProperty("xrRig").objectReferenceValue      = xrRig;
+        so.FindProperty("desktopRig").objectReferenceValue = desktop;
+        so.ApplyModifiedPropertiesWithoutUndo();
+        Log("Two rigs built. Press Play with no headset for the desktop Player (WASD, mouse, E); " +
+            "on the Quest the VR rig is used automatically.");
     }
 
     static Camera ConfigureCamera(GameObject go)
@@ -948,7 +1024,6 @@ public static class BrickMuseumVR
         }
         return false;
     }
-
 
     static void Log(string m) { Debug.Log("[BrickMuseum] " + m); }
 }
