@@ -195,9 +195,25 @@ public static class BrickMuseumVR
             Log("Created a new empty scene.");
         }
 
+        // Remove our own last build, AND everything the older Tools > ... scripts
+        // left behind. Without this, a scene that ever had Tools > Add Exhibits run
+        // in it ends up with two of every exhibit - pick one up and the other is
+        // still sitting on the plinth.
+        var stale = new HashSet<string>
+        {
+            RootName, "Player",
+            "Museum", "MuseumLights", "MuseumCeiling", "MuseumDoors", "MuseumExhibits",
+            "XR Origin (Museum)", "HAKU_MUSEUM_GENERATED", "HAKU_MUSEUM_GENERATED_V2",
+        };
+        int removed = 0;
         foreach (GameObject go in scene.GetRootGameObjects())
-            if (go.name == RootName || go.name == "Player")
+            if (stale.Contains(go.name))
+            {
+                if (go.name != RootName && go.name != "Player")
+                    Log("Removed leftover '" + go.name + "' from an older generator.");
                 UnityEngine.Object.DestroyImmediate(go);
+                removed++;
+            }
 
         var root = new GameObject(RootName);
         root.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
@@ -485,7 +501,7 @@ public static class BrickMuseumVR
         Inspect(inspectable, sword, "Viking Sword",
             "Iron blade with a lobed pommel and decorated crossguard, c. 9th-10th century. " +
             "Blades of this type were pattern-welded and often carry an inlaid maker's mark.",
-            0.85f, new Vector3(0f, 0f, 75f));
+            1.15f, new Vector3(0f, 0f, 75f));   // ~1 m long, so hold it further out
         Placard(parent, "VIKING SWORD", Rooms[si], Approach[si]);
 
         int ji = Mathf.Clamp(JarRoom - 1, 0, Rooms.Length - 1);
