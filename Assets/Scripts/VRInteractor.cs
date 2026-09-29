@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using XRDevice       = UnityEngine.XR.InputDevice;
@@ -18,24 +17,24 @@ using XRNode         = UnityEngine.XR.XRNode;
 //   Trigger      (either hand, pointing at it)
 //                  Inspectable  -> pick it up; turn it with your wrist
 //                  DoorInteract -> open / close
-//                  teleport pad -> jump there, facing the exhibit
 //   Trigger or Grip while holding -> put it back
-//   X (left)     show / hide the small debug readout in front of your face
+//   X (left)     show / hide the small debug readout (includes fps)
 //
 // Each controller is read TWO independent ways and the results are merged:
 //   1. Input System  <XRController>{LeftHand}/...   (gives the proper aim/pointer pose)
 //   2. UnityEngine.XR.InputDevices                   (works whatever layouts are registered)
-// so if one path is missing on a given runtime (Quest Link vs. standalone Quest) the other
-// still drives the hand.
+//
+// PERFORMANCE: this runs every frame on a phone-class CPU/GPU, so the per-frame path
+// allocates nothing (NonAlloc raycasts, cached strings, TextMesh rebuilt only when its
+// text changes, debug readout refreshed four times a second).
 
 [DisallowMultipleComponent]
 public class VRInteractor : MonoBehaviour
 {
-    public float reach       = 4f;
-    public float moveSpeed   = 2f;
-    public float snapAngle   = 30f;
-    public float padSnapDist = 0.5f;   // aim this close to a pad and it still counts
-    public bool  showDebug   = true;   // readout in front of the face; X button toggles
+    public float reach     = 4f;
+    public float moveSpeed = 2f;
+    public float snapAngle = 30f;
+    public bool  showDebug = true;   // readout in front of the face; X button toggles
 
     const float Press = 0.6f;
 
@@ -47,8 +46,10 @@ public class VRInteractor : MonoBehaviour
         public XRNode     node;
         public Transform  root;
         public LineRenderer ray;
+        public Material   rayMat;
+        public Color      rayColor = Color.white;
         public InputAction pos, rot, pointPos, pointRot, trigger, grip, stick;
-        public XRDevice dev;
+        public XRDevice   dev;
         float nextDeviceLookup;
 
         public bool  present;              // some source is giving us this controller
@@ -57,6 +58,14 @@ public class VRInteractor : MonoBehaviour
         public Vector2 stickVal;
         public bool  triggerDown, gripDown, primaryDown;
         float prevTrig, prevGrip; bool prevPrimary;
+
+        // what the ray is on; the prompt string is cached so nothing allocates per frame
+        public Collider     seenCol;
+        public Inspectable  item;
+        public DoorInteract door;
+        public bool   doorWasOpen;
+        public string prompt;
+        public Vector3 aimPoint;
 
         public static InputAction Make(string n, string type, params string[] paths)
         {
@@ -137,12 +146,20 @@ public class VRInteractor : MonoBehaviour
             stickVal = isStick.sqrMagnitude > xrStick.sqrMagnitude ? isStick : xrStick;
 
             if (havePose && root != null) root.SetLocalPositionAndRotation(p3, q);
-            if (root != null) root.gameObject.SetActive(present && havePose);
+            bool show = present && havePose;
+            if (root != null && root.gameObject.activeSelf != show) root.gameObject.SetActive(show);
 
             triggerDown = trig >= Press && prevTrig < Press;
             gripDown    = gripVal >= Press && prevGrip < Press;
             primaryDown = xrPrimary && !prevPrimary;
             prevTrig = trig; prevGrip = gripVal; prevPrimary = xrPrimary;
+        }
+
+        public void SetRayColor(Color c)
+        {
+            if (c == rayColor) return;
+            rayColor = c;
+            Paint(rayMat, c);
         }
     }
 
@@ -155,9 +172,22 @@ public class VRInteractor : MonoBehaviour
     TextMesh  label, hud;
     Font      font;
     bool      turnLatched;
-    Transform[] pads = new Transform[0];
     string    lastError = "";
-    string    rayInfoL = "-", rayInfoR = "-";
+
+    readonly RaycastHit[] hitBuf = new RaycastHit[16];
+
+    string labelText = "";
+    float  nextHud;
+    float  fpsTimer, worstFrame, fps, worstMs;
+    int    fpsFrames;
+
+    readonly System.Collections.Generic.List<UnityEngine.XR.XRDisplaySubsystem> displays =
+        new System.Collections.Generic.List<UnityEngine.XR.XRDisplaySubsystem>();
+    float displayHz;
+    float nextDisplayHz;
+
+    float   lastCapH = -1f;
+    Vector3 lastCapC;
 
     Inspectable held;
     Hand        heldBy;
@@ -165,6 +195,7 @@ public class VRInteractor : MonoBehaviour
     Vector3     homePos;
     Quaternion  homeRot;
     Collider[]  heldColliders;
+    string      heldText;
 
     // ============================================================ setup
 
@@ -195,18 +226,9 @@ public class VRInteractor : MonoBehaviour
         try { font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"); } catch { }
         if (font == null) { try { font = Resources.GetBuiltinResource<Font>("Arial.ttf"); } catch { } }
 
-        var padRoot = GameObject.Find("TeleportAnchors");
-        if (padRoot != null)
-        {
-            var list = new List<Transform>();
-            foreach (Transform c in padRoot.transform) list.Add(c);
-            pads = list.ToArray();
-        }
-
-        // Reuse a material already in the scene (the glowing pad one) so its shader is
-        // guaranteed to be in the build; Shader.Find alone can be stripped on device.
-        Renderer src = pads.Length > 0 ? pads[0].GetComponent<Renderer>() : null;
-        if (src == null) src = FindFirstObjectByType<MeshRenderer>();
+        // Reuse a material already in the scene so its shader is guaranteed to be in the
+        // build; Shader.Find alone can be stripped on device.
+        Renderer src = FindAnyObjectByType<MeshRenderer>();
         if (src != null && src.sharedMaterial != null) tint = new Material(src.sharedMaterial);
         else
         {
@@ -214,11 +236,13 @@ public class VRInteractor : MonoBehaviour
             if (s == null) s = Shader.Find("Sprites/Default");
             tint = new Material(s);
         }
+        tint.mainTexture = null;
 
         Transform parent = head.parent != null ? head.parent : rig;
         left  = MakeHand(parent, "LeftHand",  XRNode.LeftHand,  "Left Controller");
         right = MakeHand(parent, "RightHand", XRNode.RightHand, "Right Controller");
         label = MakeText("VR Label", rig, 0.01f, 48, TextAnchor.LowerCenter);
+        label.gameObject.SetActive(false);
         hud   = MakeText("VR Debug",  head, 0.0035f, 48, TextAnchor.UpperLeft);
         hud.transform.localPosition = new Vector3(-0.30f, 0.16f, 0.85f);
         hud.transform.localRotation = Quaternion.identity;
@@ -254,7 +278,9 @@ public class VRInteractor : MonoBehaviour
         h.ray.endWidth   = 0.004f;
         h.ray.useWorldSpace = true;
         h.ray.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        h.ray.sharedMaterial = Tinted(Color.white);
+        h.ray.receiveShadows = false;
+        h.rayMat = Tinted(Color.white);
+        h.ray.sharedMaterial = h.rayMat;
         return h;
     }
 
@@ -297,6 +323,7 @@ public class VRInteractor : MonoBehaviour
     void Update()
     {
         if (left == null || right == null || head == null) return;
+        Frame();
         try
         {
             left.Poll();
@@ -311,21 +338,15 @@ public class VRInteractor : MonoBehaviour
             if (held != null)
             {
                 if (heldBy.triggerDown || heldBy.gripDown || left.gripDown || right.gripDown) PutBack();
-                else
-                {
-                    prompt   = Wrap(held.displayName + "\n" + held.description, 34) +
-                               "\n\nTrigger or grip: put it back";
-                    promptAt = held.transform.position + Vector3.up * 0.3f;
-                }
+                else { prompt = heldText; promptAt = held.transform.position + Vector3.up * 0.3f; }
                 left.ray.enabled = right.ray.enabled = false;
             }
             else
             {
-                string pl, pr; Vector3 al, ar;
-                rayInfoL = Interact(left,  out pl, out al);
-                rayInfoR = Interact(right, out pr, out ar);
-                if (pr != null)      { prompt = pr; promptAt = ar; }
-                else if (pl != null) { prompt = pl; promptAt = al; }
+                Interact(left);
+                Interact(right);
+                if (right.prompt != null)     { prompt = right.prompt; promptAt = right.aimPoint; }
+                else if (left.prompt != null) { prompt = left.prompt;  promptAt = left.aimPoint; }
             }
 
             ShowLabel(prompt, promptAt);
@@ -338,93 +359,88 @@ public class VRInteractor : MonoBehaviour
         UpdateHud();
     }
 
+    /// Frame-rate meter: average fps and the worst single frame over the last second.
+    void Frame()
+    {
+        float dt = Time.unscaledDeltaTime;
+        fpsFrames++;
+        fpsTimer += dt;
+        if (dt > worstFrame) worstFrame = dt;
+        if (fpsTimer >= 1f)
+        {
+            fps = fpsFrames / fpsTimer;
+            worstMs = worstFrame * 1000f;
+            fpsFrames = 0; fpsTimer = 0f; worstFrame = 0f;
+        }
+    }
+
     // ============================================================ interaction
 
-    /// Returns a short description of what the ray is on (for the debug readout).
-    string Interact(Hand h, out string prompt, out Vector3 at)
+    void Interact(Hand h)
     {
-        prompt = null; at = Vector3.zero;
-        if (!h.root.gameObject.activeSelf) return "no pose";
+        if (!h.root.gameObject.activeSelf)
+        {
+            h.prompt = null; h.seenCol = null; h.item = null; h.door = null;
+            return;
+        }
 
         Vector3 o = h.root.position, d = h.root.forward, end = o + d * reach;
-        Inspectable  item = null;
-        DoorInteract door = null;
-        Transform    arrive = null;
-        Color col = Color.white;
-        string seen = "nothing";
 
         // Nearest hit that is not the rig's own walking capsule.
-        RaycastHit hit = default(RaycastHit);
-        bool got = false;
-        var hits = Physics.RaycastAll(o, d, reach, ~0, QueryTriggerInteraction.Ignore);
+        int n = Physics.RaycastNonAlloc(o, d, hitBuf, reach, ~0, QueryTriggerInteraction.Ignore);
         float best = float.MaxValue;
-        foreach (var x in hits)
+        int bi = -1;
+        for (int i = 0; i < n; i++)
         {
-            if (x.collider == cc) continue;
-            if (x.collider.transform.IsChildOf(rig)) continue;
-            if (x.distance < best) { best = x.distance; hit = x; got = true; }
+            var c = hitBuf[i].collider;
+            if (c == cc || c.transform.IsChildOf(rig)) continue;
+            if (hitBuf[i].distance < best) { best = hitBuf[i].distance; bi = i; }
         }
 
-        if (got)
+        Collider     col  = null;
+        Inspectable  item = null;
+        DoorInteract door = null;
+        if (bi >= 0)
         {
-            end = hit.point;
-            seen = hit.collider.name;
-            item = hit.collider.GetComponentInParent<Inspectable>();
-            if (item == null) door = hit.collider.GetComponentInParent<DoorInteract>();
-            if (item == null && door == null) arrive = PadNear(hit);
+            col = hitBuf[bi].collider;
+            end = hitBuf[bi].point;
+            if (col != h.seenCol || h.item != null || h.door != null)
+            {
+                item = col.GetComponentInParent<Inspectable>();
+                if (item == null) door = col.GetComponentInParent<DoorInteract>();
+            }
+            else { item = h.item; door = h.door; }
         }
+        h.seenCol = col;
 
-        if (item != null)        { prompt = "Trigger: inspect " + item.displayName; col = Color.green; seen += " [item]"; }
-        else if (door != null)   { prompt = "Trigger: " + door.Prompt();            col = Color.green; seen += " [door]"; }
-        else if (arrive != null) { prompt = "Trigger: teleport here";               col = new Color(0.3f, 0.8f, 1f); seen += " [pad]"; }
-        at = end;
+        // Rebuild the prompt string only when the target (or a door's state) changes.
+        if (item != h.item || door != h.door || (door != null && door.isOpen != h.doorWasOpen))
+        {
+            h.item = item; h.door = door;
+            h.doorWasOpen = door != null && door.isOpen;
+            if (item != null)      h.prompt = "Trigger: inspect " + item.displayName;
+            else if (door != null) h.prompt = "Trigger: " + door.Prompt();
+            else                   h.prompt = null;
+        }
+        h.aimPoint = end;
 
         h.ray.enabled = true;
         h.ray.SetPosition(0, o);
         h.ray.SetPosition(1, end);
-        Paint(h.ray.sharedMaterial, col);
+        h.SetRayColor(h.prompt != null ? Color.green : Color.white);
 
         if (h.triggerDown)
         {
-            if (item != null)        Pick(h, item);
-            else if (door != null)   door.Toggle();
-            else if (arrive != null) TeleportTo(arrive);
+            if (item != null)      Pick(h, item);
+            else if (door != null) door.Toggle();
         }
-        return seen;
-    }
-
-    /// The pad itself, or the nearest pad to a floor hit - pads are small and a ray
-    /// that lands 20 cm off should still count.
-    Transform PadNear(RaycastHit hit)
-    {
-        Transform t = hit.collider.transform;
-        if (t.parent != null && t.parent.name == "TeleportAnchors") return t.Find("Arrive");
-
-        Transform best = null;
-        float bestD = padSnapDist;
-        foreach (var p in pads)
-        {
-            Vector3 dv = p.position - hit.point; dv.y = 0f;
-            if (dv.magnitude < bestD) { bestD = dv.magnitude; best = p; }
-        }
-        return best != null ? best.Find("Arrive") : null;
-    }
-
-    void TeleportTo(Transform arrive)
-    {
-        float yaw = Mathf.DeltaAngle(head.eulerAngles.y, arrive.eulerAngles.y);
-        cc.enabled = false;
-        rig.RotateAround(head.position, Vector3.up, yaw);
-        Vector3 d = arrive.position - head.position;
-        d.y = 0f;
-        rig.position += d;
-        cc.enabled = true;
     }
 
     void Pick(Hand h, Inspectable item)
     {
         held   = item;
         heldBy = h;
+        heldText = Wrap(item.displayName + "\n" + item.description, 34) + "\n\nTrigger or grip: put it back";
 
         var t = item.transform;
         homeParent = t.parent;
@@ -448,6 +464,7 @@ public class VRInteractor : MonoBehaviour
         foreach (var c in heldColliders) c.enabled = true;
         held = null;
         heldBy = null;
+        left.item = right.item = null;     // force the prompts to rebuild
     }
 
     // ============================================================ locomotion
@@ -470,11 +487,18 @@ public class VRInteractor : MonoBehaviour
         }
         else if (Mathf.Abs(turn.x) < 0.4f) turnLatched = false;
 
-        // capsule tracks the head so you cannot walk your head through a wall
+        // capsule tracks the head so you cannot walk your head through a wall.
+        // Only touch the collider when it has actually moved a bit - resizing it every
+        // frame makes physics rebuild it for nothing.
         Vector3 hl = rig.InverseTransformPoint(head.position);
         float h = Mathf.Clamp(hl.y, 0.6f, 2.2f);
-        cc.height = h;
-        cc.center = new Vector3(hl.x, h * 0.5f + cc.skinWidth, hl.z);
+        Vector3 c = new Vector3(hl.x, h * 0.5f + cc.skinWidth, hl.z);
+        if (Mathf.Abs(h - lastCapH) > 0.01f || (c - lastCapC).sqrMagnitude > 0.0001f)
+        {
+            cc.height = h;
+            cc.center = c;
+            lastCapH = h; lastCapC = c;
+        }
 
         if (move.sqrMagnitude < 0.04f) return;
 
@@ -493,10 +517,18 @@ public class VRInteractor : MonoBehaviour
     void ShowLabel(string text, Vector3 at)
     {
         if (label == null) return;
-        if (string.IsNullOrEmpty(text)) { label.gameObject.SetActive(false); return; }
+        if (string.IsNullOrEmpty(text))
+        {
+            if (label.gameObject.activeSelf) label.gameObject.SetActive(false);
+            return;
+        }
 
-        label.gameObject.SetActive(true);
-        label.text = text;
+        if (!label.gameObject.activeSelf) label.gameObject.SetActive(true);
+        if (!ReferenceEquals(text, labelText))     // prompts are cached strings, so a reference test is enough
+        {
+            labelText = text;
+            label.text = text;                     // rebuilding a TextMesh is not free - only on change
+        }
 
         Vector3 toHead = head.position - at;
         float dist = Mathf.Clamp(toHead.magnitude, 0.6f, 6f);
@@ -513,15 +545,35 @@ public class VRInteractor : MonoBehaviour
                "  stick " + h.stickVal.x.ToString("0.0") + "," + h.stickVal.y.ToString("0.0");
     }
 
+    static string Seen(Hand h)
+    {
+        if (h.seenCol == null) return "nothing";
+        return h.seenCol.name + (h.item != null ? " [item]" : h.door != null ? " [door]" : "");
+    }
+
     void UpdateHud()
     {
         if (hud == null) return;
-        hud.gameObject.SetActive(showDebug);
-        if (!showDebug) return;
+        if (hud.gameObject.activeSelf != showDebug) hud.gameObject.SetActive(showDebug);
+        if (!showDebug || Time.unscaledTime < nextHud) return;
+        nextHud = Time.unscaledTime + 0.25f;    // 4 Hz: this string building is the only garbage left
+
+        if (Time.unscaledTime >= nextDisplayHz)
+        {
+            nextDisplayHz = Time.unscaledTime + 2f;
+            displayHz = 0f;
+            SubsystemManager.GetSubsystems(displays);
+            foreach (var d in displays)
+            {
+                float hz;
+                if (d.running && d.TryGetDisplayRefreshRate(out hz)) { displayHz = hz; break; }
+            }
+        }
+
         hud.text =
-            "VRInteractor (X = hide)\n" +
-            "L " + Hs(left)  + "\n  ray: " + rayInfoL + "\n" +
-            "R " + Hs(right) + "\n  ray: " + rayInfoR + "\n" +
+            fps.ToString("0") + " fps of " + (displayHz > 0f ? displayHz.ToString("0") : "?") + " Hz   worst frame " + worstMs.ToString("0.0") + " ms   (X = hide)\n" +
+            "L " + Hs(left)  + "\n  ray: " + Seen(left) + "\n" +
+            "R " + Hs(right) + "\n  ray: " + Seen(right) + "\n" +
             (held != null ? "holding: " + held.displayName + "\n" : "") +
             (lastError.Length > 0 ? "ERR " + lastError : "");
     }

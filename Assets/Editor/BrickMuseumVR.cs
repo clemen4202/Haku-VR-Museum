@@ -215,6 +215,9 @@ public static class BrickMuseumVR
                 removed++;
             }
 
+        // Teleport was removed; delete the pad material an earlier build left behind.
+        AssetDatabase.DeleteAsset(MatFolder + "/M_TeleportPad.mat");
+
         var root = new GameObject(RootName);
         root.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
         s_Root = root.transform;
@@ -630,7 +633,7 @@ public static class BrickMuseumVR
     static GameObject BuildRig()
     {
         // If the XRI Starter Assets rig is already in the scene it is far better
-        // than anything built here - controllers, ray interactors and teleport are
+        // than anything built here - controllers, ray interactors and locomotion are
         // already wired - so just move it to the entry and leave it alone.
         var starter = GameObject.Find("XR Origin (XR Rig)");
         if (starter != null)
@@ -681,8 +684,9 @@ public static class BrickMuseumVR
             new GameObject("XR Interaction Manager").AddComponent(im);
 
         WireHeadTracking(camGo);
-        Log("XR rig built at the entry porch. HEAD-TRACKED ONLY - use the Starter Assets " +
-            "prefab for controllers and teleport.");
+        Log("XR rig built at the entry porch. Controller pointing, trigger interaction, stick " +
+            "walking come from Assets/Scripts/VRInteractor.cs, which RigSelector " +
+            "adds to this rig at runtime when a headset is running.");
         return rig;
     }
 
