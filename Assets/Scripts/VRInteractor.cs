@@ -19,6 +19,7 @@ using XRNode         = UnityEngine.XR.XRNode;
 //                  Inspectable  -> pick it up; turn it with your wrist
 //                  DoorInteract -> open / close
 //   T1 or G1 while holding -> put it back
+//   T1 on the guide character (Haku) or on its panel buttons -> MuseumGuide (local Ollama AI)
 //   X (left)     show / hide the small debug readout (includes fps)
 //
 // Each controller is read TWO independent ways and the results are merged:
@@ -64,7 +65,10 @@ public class VRInteractor : MonoBehaviour
         public Collider     seenCol;
         public Inspectable  item;
         public DoorInteract door;
+        public DocentButton btn;      // the guide, or a button on its panel
+        public bool   consumed;       // T1 was pressed on a guide button this frame
         public bool   doorWasOpen;
+        public bool   guideOnly;
         public string prompt;
         public Vector3 aimPoint;
 
@@ -197,6 +201,7 @@ public class VRInteractor : MonoBehaviour
     Quaternion  homeRot;
     Collider[]  heldColliders;
     string      heldText;
+    MuseumGuide guide;
     Vector3     heldLocalPos;
     float       heldRadius;
 
@@ -249,6 +254,19 @@ public class VRInteractor : MonoBehaviour
         hud.transform.localPosition = new Vector3(-0.30f, 0.16f, 0.85f);
         hud.transform.localRotation = Quaternion.identity;
         hud.color = new Color(1f, 1f, 0.4f);
+
+        // The AI guide. A failure here must never take the controllers down with it.
+        try
+        {
+            guide = gameObject.AddComponent<MuseumGuide>();
+            guide.heldProvider = () => held;
+            guide.Init(head, cc, rig);
+        }
+        catch (Exception e)
+        {
+            lastError = "guide: " + e.Message;
+            Debug.LogException(e);
+        }
     }
 
     Hand MakeHand(Transform parent, string usage, XRNode node, string name)
@@ -340,18 +358,20 @@ public class VRInteractor : MonoBehaviour
             string prompt = null;
             Vector3 promptAt = Vector3.zero;
 
-            if (held != null)
+            // While holding an item the rays only care about the guide (so you can ask about the item).
+            bool holding = held != null;
+            Interact(left,  holding);
+            Interact(right, holding);
+
+            if (right.prompt != null)     { prompt = right.prompt; promptAt = right.aimPoint; }
+            else if (left.prompt != null) { prompt = left.prompt;  promptAt = left.aimPoint; }
+
+            if (holding)
             {
-                if (heldBy.triggerDown || heldBy.gripDown || left.gripDown || right.gripDown) PutBack();
-                else { prompt = heldText; promptAt = held.transform.position + Vector3.up * 0.3f; }
-                left.ray.enabled = right.ray.enabled = false;
-            }
-            else
-            {
-                Interact(left);
-                Interact(right);
-                if (right.prompt != null)     { prompt = right.prompt; promptAt = right.aimPoint; }
-                else if (left.prompt != null) { prompt = left.prompt;  promptAt = left.aimPoint; }
+                // A T1 press that landed on a guide button is not also "put it back".
+                bool putBack = (heldBy.triggerDown && !heldBy.consumed) || left.gripDown || right.gripDown;
+                if (putBack) PutBack();
+                else if (prompt == null) { prompt = heldText; promptAt = held.transform.position + Vector3.up * 0.3f; }
             }
 
             ShowLabel(prompt, promptAt);
@@ -381,11 +401,13 @@ public class VRInteractor : MonoBehaviour
 
     // ============================================================ interaction
 
-    void Interact(Hand h)
+    void Interact(Hand h, bool guideOnly)
     {
+        h.consumed = false;
         if (!h.root.gameObject.activeSelf)
         {
-            h.prompt = null; h.seenCol = null; h.item = null; h.door = null;
+            h.prompt = null; h.seenCol = null; h.item = null; h.door = null; h.btn = null;
+            h.ray.enabled = false;
             return;
         }
 
@@ -402,41 +424,56 @@ public class VRInteractor : MonoBehaviour
             if (hitBuf[i].distance < best) { best = hitBuf[i].distance; bi = i; }
         }
 
-        Collider     col  = null;
-        Inspectable  item = null;
-        DoorInteract door = null;
-        if (bi >= 0)
+        Collider col = bi >= 0 ? hitBuf[bi].collider : null;
+        if (bi >= 0) end = hitBuf[bi].point;
+
+        // Work out what the collider belongs to - only when the ray moves onto a different collider.
+        Inspectable  item = h.item;
+        DoorInteract door = h.door;
+        DocentButton btn  = h.btn;
+        if (col != h.seenCol || guideOnly != h.guideOnly)
         {
-            col = hitBuf[bi].collider;
-            end = hitBuf[bi].point;
-            if (col != h.seenCol || h.item != null || h.door != null)
+            item = null; door = null; btn = null;
+            if (col != null)
             {
-                item = col.GetComponentInParent<Inspectable>();
-                if (item == null) door = col.GetComponentInParent<DoorInteract>();
+                btn = col.GetComponentInParent<DocentButton>();
+                if (btn == null && !guideOnly)
+                {
+                    item = col.GetComponentInParent<Inspectable>();
+                    if (item == null) door = col.GetComponentInParent<DoorInteract>();
+                }
             }
-            else { item = h.item; door = h.door; }
         }
         h.seenCol = col;
+        h.guideOnly = guideOnly;
 
         // Rebuild the prompt string only when the target (or a door's state) changes.
-        if (item != h.item || door != h.door || (door != null && door.isOpen != h.doorWasOpen))
+        if (item != h.item || door != h.door || btn != h.btn || (door != null && door.isOpen != h.doorWasOpen))
         {
-            h.item = item; h.door = door;
+            h.item = item; h.door = door; h.btn = btn;
             h.doorWasOpen = door != null && door.isOpen;
-            if (item != null)      h.prompt = "[T1]  inspect " + item.displayName;
+            if (btn != null)       h.prompt = btn.prompt;
+            else if (item != null) h.prompt = "[T1]  inspect " + item.displayName;
             else if (door != null) h.prompt = "[T1]  " + door.Prompt();
         }
-        if (item == null && door == null) h.prompt = null;   // never leave a prompt up with nothing under the ray
+        if (item == null && door == null && btn == null) h.prompt = null;   // never leave a prompt up with nothing under the ray
         h.aimPoint = end;
 
-        h.ray.enabled = true;
-        h.ray.SetPosition(0, o);
-        h.ray.SetPosition(1, end);
-        h.SetRayColor(h.prompt != null ? Color.green : Color.white);
+        if (btn != null) btn.hoverFrame = Time.frameCount;
+
+        // While holding something, only draw the ray when it is on the guide.
+        h.ray.enabled = !guideOnly || btn != null;
+        if (h.ray.enabled)
+        {
+            h.ray.SetPosition(0, o);
+            h.ray.SetPosition(1, end);
+            h.SetRayColor(h.prompt != null ? Color.green : Color.white);
+        }
 
         if (h.triggerDown)
         {
-            if (item != null)      Pick(h, item);
+            if (btn != null)       { if (guide != null) guide.Press(btn); h.consumed = true; }
+            else if (item != null) Pick(h, item);
             else if (door != null) door.Toggle();
         }
     }
@@ -445,6 +482,7 @@ public class VRInteractor : MonoBehaviour
     {
         held   = item;
         heldBy = h;
+        if (guide != null) guide.NoteInspected(item);
         ClearTargets();
         heldText = Wrap(item.displayName + "\n" + item.description, 34) + "\n\n[T1] or [G1]  put it back";
 
@@ -507,6 +545,7 @@ public class VRInteractor : MonoBehaviour
             {
                 var c = hitBuf[i].collider;
                 if (c == cc || c.transform.IsChildOf(rig)) continue;
+                if (c.GetComponentInParent<DocentButton>() != null) continue;   // the guide is not a wall
                 if (hitBuf[i].distance < best) { best = hitBuf[i].distance; bi = i; }
             }
             if (bi >= 0)
@@ -528,7 +567,7 @@ public class VRInteractor : MonoBehaviour
     {
         foreach (var h in new[] { left, right })
         {
-            h.item = null; h.door = null; h.seenCol = null; h.prompt = null;
+            h.item = null; h.door = null; h.btn = null; h.seenCol = null; h.prompt = null;
         }
     }
 
