@@ -14,10 +14,11 @@ using XRNode         = UnityEngine.XR.XRNode;
 //
 //   Left stick   walk (relative to where you are looking)
 //   Right stick  snap turn
-//   Trigger      (either hand, pointing at it)
+//   T1 = trigger, G1 = grip, X = left X button (the tags shown in the on-screen prompts)
+//   T1           (either hand, pointing at it)
 //                  Inspectable  -> pick it up; turn it with your wrist
 //                  DoorInteract -> open / close
-//   Trigger or Grip while holding -> put it back
+//   T1 or G1 while holding -> put it back
 //   X (left)     show / hide the small debug readout (includes fps)
 //
 // Each controller is read TWO independent ways and the results are merged:
@@ -196,6 +197,8 @@ public class VRInteractor : MonoBehaviour
     Quaternion  homeRot;
     Collider[]  heldColliders;
     string      heldText;
+    Vector3     heldLocalPos;
+    float       heldRadius;
 
     // ============================================================ setup
 
@@ -223,8 +226,7 @@ public class VRInteractor : MonoBehaviour
         cc.stepOffset = 0.3f;
         cc.slopeLimit = 45f;
 
-        try { font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"); } catch { }
-        if (font == null) { try { font = Resources.GetBuiltinResource<Font>("Arial.ttf"); } catch { } }
+        font = MuseumText.BuiltinFont();
 
         // Reuse a material already in the scene so its shader is guaranteed to be in the
         // build; Shader.Find alone can be stripped on device.
@@ -241,9 +243,9 @@ public class VRInteractor : MonoBehaviour
         Transform parent = head.parent != null ? head.parent : rig;
         left  = MakeHand(parent, "LeftHand",  XRNode.LeftHand,  "Left Controller");
         right = MakeHand(parent, "RightHand", XRNode.RightHand, "Right Controller");
-        label = MakeText("VR Label", rig, 0.01f, 48, TextAnchor.LowerCenter);
+        label = MakeText("VR Label", rig, 0.01f, 48, TextAnchor.LowerCenter, false);
         label.gameObject.SetActive(false);
-        hud   = MakeText("VR Debug",  head, 0.0035f, 48, TextAnchor.UpperLeft);
+        hud   = MakeText("VR Debug",  head, 0.0035f, 48, TextAnchor.UpperLeft, true);
         hud.transform.localPosition = new Vector3(-0.30f, 0.16f, 0.85f);
         hud.transform.localRotation = Quaternion.identity;
         hud.color = new Color(1f, 1f, 0.4f);
@@ -284,7 +286,7 @@ public class VRInteractor : MonoBehaviour
         return h;
     }
 
-    TextMesh MakeText(string name, Transform parent, float size, int fontSize, TextAnchor anchor)
+    TextMesh MakeText(string name, Transform parent, float size, int fontSize, TextAnchor anchor, bool overlay)
     {
         var g = new GameObject(name);
         g.transform.SetParent(parent, false);
@@ -294,7 +296,10 @@ public class VRInteractor : MonoBehaviour
         tm.anchor        = anchor;
         tm.alignment     = anchor == TextAnchor.UpperLeft ? TextAlignment.Left : TextAlignment.Center;
         tm.color         = Color.white;
-        if (font != null) { tm.font = font; g.GetComponent<Renderer>().sharedMaterial = font.material; }
+        if (font != null) tm.font = font;
+        // Unity's default text material ignores depth and shows through walls. The label is
+        // depth-tested; the debug readout is head-locked so it stays on top.
+        if (overlay) MuseumText.ApplyOverlay(tm); else MuseumText.Apply(tm);
         return tm;
     }
 
@@ -418,10 +423,10 @@ public class VRInteractor : MonoBehaviour
         {
             h.item = item; h.door = door;
             h.doorWasOpen = door != null && door.isOpen;
-            if (item != null)      h.prompt = "Trigger: inspect " + item.displayName;
-            else if (door != null) h.prompt = "Trigger: " + door.Prompt();
-            else                   h.prompt = null;
+            if (item != null)      h.prompt = "[T1]  inspect " + item.displayName;
+            else if (door != null) h.prompt = "[T1]  " + door.Prompt();
         }
+        if (item == null && door == null) h.prompt = null;   // never leave a prompt up with nothing under the ray
         h.aimPoint = end;
 
         h.ray.enabled = true;
@@ -440,7 +445,8 @@ public class VRInteractor : MonoBehaviour
     {
         held   = item;
         heldBy = h;
-        heldText = Wrap(item.displayName + "\n" + item.description, 34) + "\n\nTrigger or grip: put it back";
+        ClearTargets();
+        heldText = Wrap(item.displayName + "\n" + item.description, 34) + "\n\n[T1] or [G1]  put it back";
 
         var t = item.transform;
         homeParent = t.parent;
@@ -451,8 +457,19 @@ public class VRInteractor : MonoBehaviour
         foreach (var c in heldColliders) c.enabled = false;
 
         t.SetParent(h.root, true);
-        t.localPosition    = new Vector3(0f, 0f, Mathf.Max(0.35f, item.holdDistance * 0.6f));
+        heldLocalPos       = new Vector3(0f, 0f, Mathf.Max(0.35f, item.holdDistance * 0.6f));
+        t.localPosition    = heldLocalPos;
         t.localEulerAngles = item.holdRotation;
+
+        // How far from its centre the item reaches, so the clamp in LateUpdate keeps all of it clear of walls.
+        var rs = item.GetComponentsInChildren<Renderer>();
+        if (rs.Length > 0)
+        {
+            Bounds b = rs[0].bounds;
+            for (int i = 1; i < rs.Length; i++) b.Encapsulate(rs[i].bounds);
+            heldRadius = Mathf.Clamp(b.extents.magnitude, 0.08f, 0.6f);
+        }
+        else heldRadius = 0.15f;
     }
 
     void PutBack()
@@ -464,7 +481,55 @@ public class VRInteractor : MonoBehaviour
         foreach (var c in heldColliders) c.enabled = true;
         held = null;
         heldBy = null;
-        left.item = right.item = null;     // force the prompts to rebuild
+        ClearTargets();                    // otherwise the old "Trigger: inspect ..." prompt outlives the item
+    }
+
+    /// The item rides on the hand, and a hand can go through a wall or below the floor.
+    /// After the hand has been posed for the frame, pull the item back inside the museum:
+    /// if anything solid is between the head and the item, put it on the head's side of that
+    /// surface; and never let it sink into the floor.
+    void LateUpdate()
+    {
+        if (held == null || heldBy == null || head == null) return;
+
+        Vector3 want = heldBy.root.TransformPoint(heldLocalPos);
+        Vector3 from = head.position;
+        Vector3 dir  = want - from;
+        float   dist = dir.magnitude;
+
+        if (dist > 0.001f)
+        {
+            dir /= dist;
+            int n = Physics.RaycastNonAlloc(from, dir, hitBuf, dist, ~0, QueryTriggerInteraction.Ignore);
+            float best = float.MaxValue;
+            int bi = -1;
+            for (int i = 0; i < n; i++)
+            {
+                var c = hitBuf[i].collider;
+                if (c == cc || c.transform.IsChildOf(rig)) continue;
+                if (hitBuf[i].distance < best) { best = hitBuf[i].distance; bi = i; }
+            }
+            if (bi >= 0)
+            {
+                float margin = Mathf.Min(heldRadius, best * 0.5f);      // never more than half way back to the head
+                want = hitBuf[bi].point - dir * margin;
+            }
+        }
+
+        // Floor: the rig root is floor level. Keep the lowest reach of the item above it.
+        float floorY = rig.position.y + Mathf.Min(heldRadius, 0.35f);
+        if (want.y < floorY) want.y = floorY;
+
+        held.transform.position = want;
+    }
+
+    /// Forget what each ray was on, including the cached prompt text.
+    void ClearTargets()
+    {
+        foreach (var h in new[] { left, right })
+        {
+            h.item = null; h.door = null; h.seenCol = null; h.prompt = null;
+        }
     }
 
     // ============================================================ locomotion
@@ -571,7 +636,7 @@ public class VRInteractor : MonoBehaviour
         }
 
         hud.text =
-            fps.ToString("0") + " fps of " + (displayHz > 0f ? displayHz.ToString("0") : "?") + " Hz   worst frame " + worstMs.ToString("0.0") + " ms   (X = hide)\n" +
+            fps.ToString("0") + " fps of " + (displayHz > 0f ? displayHz.ToString("0") : "?") + " Hz   worst frame " + worstMs.ToString("0.0") + " ms   [X] hide\n" +
             "L " + Hs(left)  + "\n  ray: " + Seen(left) + "\n" +
             "R " + Hs(right) + "\n  ray: " + Seen(right) + "\n" +
             (held != null ? "holding: " + held.displayName + "\n" : "") +
