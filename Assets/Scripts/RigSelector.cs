@@ -25,12 +25,9 @@ public class RigSelector : MonoBehaviour
     [Tooltip("How long to keep waiting for a headset that was not running at Start.")]
     public float waitForHeadset = 20f;
 
-    [Tooltip("Display refresh rate to request from the headset, in Hz (Quest 3 offers 72, 80, 90, 120). 0 = leave at the system default.")]
-    public float refreshRate = 72f;
-
     bool usingVR;
     float waited;
-    bool refreshDone;
+    bool refreshLogged;
     int refreshTries;
     float nextRefresh;
 
@@ -41,7 +38,7 @@ public class RigSelector : MonoBehaviour
 
     void Update()
     {
-        if (usingVR) { RequestRefreshRate(); return; }
+        if (usingVR) { LogRefreshRate(); return; }
         if (forceDesktop || waited > waitForHeadset) return;
         waited += Time.unscaledDeltaTime;
         if (XRRunning()) Apply(true);
@@ -64,38 +61,25 @@ public class RigSelector : MonoBehaviour
             : "[RigSelector] No headset (yet) - using the desktop Player (WASD, mouse, E to interact).");
     }
 
-    /// Ask the headset for a fixed refresh rate. The display is not always ready to
-    /// accept the request on the first frame, so retry twice a second for ~10 s.
-    void RequestRefreshRate()
+    /// Log the refresh rate the headset is actually running at. This Unity version has no
+    /// API to CHANGE it, so 72 Hz has to be set on the headset (see below) - this just
+    /// reports what you got. Retries briefly because the display is not always ready at once.
+    void LogRefreshRate()
     {
-        if (refreshDone || refreshRate <= 0f || Time.unscaledTime < nextRefresh) return;
+        if (refreshLogged || Time.unscaledTime < nextRefresh) return;
         nextRefresh = Time.unscaledTime + 0.5f;
-
-        if (++refreshTries > 20)
-        {
-            refreshDone = true;
-            Debug.LogWarning("[RigSelector] Could not set the display refresh rate to " + refreshRate +
-                             " Hz (this runtime may not support changing it - normal over Quest Link).");
-            return;
-        }
+        if (++refreshTries > 20) { refreshLogged = true; return; }
 
         var displays = new List<XRDisplaySubsystem>();
         SubsystemManager.GetSubsystems(displays);
         foreach (var d in displays)
         {
-            if (!d.running) continue;
-
-            float now;
-            if (d.TryGetDisplayRefreshRate(out now) && Mathf.Abs(now - refreshRate) < 0.5f)
+            float hz;
+            if (d.running && d.TryGetDisplayRefreshRate(out hz))
             {
-                Debug.Log("[RigSelector] Display already at " + now + " Hz.");
-                refreshDone = true;
-                return;
-            }
-            if (d.TrySetDisplayRefreshRate(refreshRate))
-            {
-                Debug.Log("[RigSelector] Requested " + refreshRate + " Hz display refresh.");
-                refreshDone = true;
+                Debug.Log("[RigSelector] Display refresh rate: " + hz + " Hz" +
+                          (Mathf.Abs(hz - 72f) < 0.5f ? "." : " (not 72 - set it in the headset's settings)."));
+                refreshLogged = true;
                 return;
             }
         }
