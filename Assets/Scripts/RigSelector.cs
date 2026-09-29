@@ -9,8 +9,10 @@ using UnityEngine.XR;
 //   - the desktop 'Player' (WASD, E)    -> used in the Editor with no headset
 //
 // On Start this checks whether an XR display is actually running and switches
-// on exactly one of them. The Quest build therefore uses the VR rig, and pressing
-// Play in the Editor gives you a walkable, E-to-interact desktop player.
+// on exactly one of them. The XR display can come up a moment AFTER the first
+// frame (Quest Link, Quest launch), so if no headset is seen at Start this keeps
+// looking for a few seconds and switches to the VR rig as soon as one appears.
+// The VR rig gets VRInteractor (controller pointing, sticks, teleport) at that point.
 
 public class RigSelector : MonoBehaviour
 {
@@ -20,16 +22,39 @@ public class RigSelector : MonoBehaviour
     [Tooltip("Tick to use the desktop rig even when a headset is connected (e.g. recording the demo video).")]
     public bool forceDesktop = false;
 
+    [Tooltip("How long to keep waiting for a headset that was not running at Start.")]
+    public float waitForHeadset = 20f;
+
+    bool usingVR;
+    float waited;
+
     void Start()
     {
-        bool vr = !forceDesktop && XRRunning();
+        Apply(!forceDesktop && XRRunning());
+    }
+
+    void Update()
+    {
+        if (forceDesktop || usingVR || waited > waitForHeadset) return;
+        waited += Time.unscaledDeltaTime;
+        if (XRRunning()) Apply(true);
+    }
+
+    void Apply(bool vr)
+    {
+        usingVR = vr;
 
         if (xrRig != null)      xrRig.SetActive(vr);
         if (desktopRig != null) desktopRig.SetActive(!vr);
 
+        // Controller pointing, trigger interaction, stick locomotion and teleport.
+        // InspectController is keyboard-only and sits on the (now inactive) desktop rig.
+        if (vr && xrRig != null && xrRig.GetComponent<VRInteractor>() == null)
+            xrRig.AddComponent<VRInteractor>();
+
         Debug.Log(vr
             ? "[RigSelector] Headset detected - using the VR rig."
-            : "[RigSelector] No headset - using the desktop Player (WASD, mouse, E to interact).");
+            : "[RigSelector] No headset (yet) - using the desktop Player (WASD, mouse, E to interact).");
     }
 
     static bool XRRunning()
