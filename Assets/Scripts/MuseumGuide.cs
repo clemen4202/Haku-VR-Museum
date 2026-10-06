@@ -73,9 +73,16 @@ public class MuseumGuide : MonoBehaviour
     bool  open, busy, ready;
     string warmProblem;
     bool  greeted;
-    float lostSight;
-    bool  catchingUp = true;      // glide to the target on the first frames
+    bool  catchingUp;
     Vector3 followVel;
+    Vector3 spot;                 // where it wants to stand (feet, at floor level)
+    bool  hasSpot, hereOk = true;
+    float nextCheck;
+    float appearT = 1f;           // 0..1 while popping back in after a jump
+
+    // The guide's body for space checks: a capsule from 0.25 m to 1.75 m above the floor.
+    const float BodyRadius = 0.3f, BodyBottom = 0.25f, BodyTop = 1.75f;
+    readonly Collider[] overlap = new Collider[16];
     float bobPhase;
 
     readonly HashSet<Inspectable> inspected = new HashSet<Inspectable>();
@@ -105,7 +112,7 @@ public class MuseumGuide : MonoBehaviour
         BuildDocent();
         BuildPanel();
         panel.gameObject.SetActive(false);
-        docent.position = Target();
+        docent.position = FindSpot(out spot) ? spot : head.position + Vector3.ProjectOnPlane(head.forward, Vector3.up).normalized;
 
         StartCoroutine(WarmUp());
     }
@@ -265,37 +272,59 @@ public class MuseumGuide : MonoBehaviour
         Vector3 hp = head.position;
         Vector3 dp = docent.position;
         float floorY = FloorY();
+        Vector3 feet = new Vector3(dp.x, floorY, dp.z);
 
-        Vector3 target = Target();
-        Vector3 toGuide  = new Vector3(dp.x - hp.x, 0f, dp.z - hp.z);
-        Vector3 toTarget = new Vector3(target.x - hp.x, 0f, target.z - hp.z);
-        float dist = toGuide.magnitude;
-
-        // A wall between you (you went through a door or round a corner): re-appear in front
-        // straight away rather than gliding through the wall.
-        lostSight = LineClear(hp, dp + Vector3.up * 1.2f) ? 0f : lostSight + Time.deltaTime;
-        if (lostSight > 0.3f || dist > 6f)
+        // Re-plan ten times a second: where should it stand, and is where it stands still OK?
+        if (Time.time >= nextCheck)
         {
-            docent.position = new Vector3(target.x, dp.y, target.z);
-            lostSight = 0f;
-            catchingUp = false;
-            followVel = Vector3.zero;
+            nextCheck = Time.time + 0.1f;
+            hasSpot = FindSpot(out spot);
+            hereOk  = SpotFree(feet) && LineClear(hp, feet + Vector3.up * 1.2f);
         }
-        else
-        {
-            // Lazy follow, like a headset menu: small head movements leave it where it is (so the
-            // panel holds still while you aim at a button); once it drifts out of the comfortable
-            // zone in front of you it glides back.
-            float off = (dist > 0.01f && toTarget.sqrMagnitude > 0.01f) ? Vector3.Angle(toGuide, toTarget) : 0f;
-            if (off > comfortAngle || dist < 0.9f || dist > followDistance + 1f) catchingUp = true;
 
-            if (catchingUp)
+        if (hasSpot)
+        {
+            Vector3 toGuide = new Vector3(dp.x - hp.x, 0f, dp.z - hp.z);
+            Vector3 toSpot  = new Vector3(spot.x - hp.x, 0f, spot.z - hp.z);
+            float dist = toGuide.magnitude;
+
+            if (!hereOk)
             {
-                Vector3 cur = new Vector3(dp.x, 0f, dp.z), tgt = new Vector3(target.x, 0f, target.z);
-                Vector3 next = Vector3.SmoothDamp(cur, tgt, ref followVel, 0.25f, 8f);
-                docent.position = new Vector3(next.x, dp.y, next.z);
-                if ((next - tgt).sqrMagnitude < 0.0025f) catchingUp = false;     // within 5 cm: settle
+                // Standing somewhere it must not be (a door swung into it, a wall is now between
+                // you): re-appear at the free spot rather than staying in, or behind, the wall.
+                Appear(spot);
             }
+            else
+            {
+                // Lazy follow, like a headset menu: small head movements leave it where it is (so the
+                // panel holds still while you aim at a button); once it drifts out of the comfortable
+                // zone in front of you it moves back.
+                float off = (dist > 0.01f && toSpot.sqrMagnitude > 0.01f) ? Vector3.Angle(toGuide, toSpot) : 0f;
+                if (off > comfortAngle || dist < 0.8f || dist > followDistance + 1f) catchingUp = true;
+
+                if (catchingUp)
+                {
+                    if (!PathClear(feet, spot))
+                    {
+                        Appear(spot);          // a wall, door or plinth is in the way: never glide through it
+                    }
+                    else
+                    {
+                        Vector3 cur = new Vector3(dp.x, 0f, dp.z), tgt = new Vector3(spot.x, 0f, spot.z);
+                        Vector3 next = Vector3.SmoothDamp(cur, tgt, ref followVel, 0.25f, 8f);
+                        docent.position = new Vector3(next.x, dp.y, next.z);
+                        if ((next - tgt).sqrMagnitude < 0.0025f) catchingUp = false;     // within 5 cm: settle
+                    }
+                }
+            }
+        }
+        // (no free spot anywhere in front - e.g. squeezed in a doorway - so it simply stays put)
+
+        // pop back in after a jump
+        if (appearT < 1f)
+        {
+            appearT = Mathf.Min(1f, appearT + Time.deltaTime / 0.2f);
+            docent.localScale = Vector3.one * Mathf.SmoothStep(0.4f, 1f, appearT);
         }
 
         // hover a little and face the visitor
@@ -312,6 +341,15 @@ public class MuseumGuide : MonoBehaviour
         }
     }
 
+    void Appear(Vector3 at)
+    {
+        docent.position = new Vector3(at.x, docent.position.y, at.z);
+        catchingUp = false;
+        followVel  = Vector3.zero;
+        hereOk     = true;
+        appearT    = 0f;
+    }
+
     void LateUpdate()
     {
         if (!open || panel == null || head == null) return;
@@ -326,29 +364,84 @@ public class MuseumGuide : MonoBehaviour
 
     float FloorY() { return rig != null ? rig.position.y : 0f; }
 
-    /// Where the guide wants to be: in front of the visitor, slightly to the right, and always
-    /// on this side of any wall. Every option is in front, so it never ends up behind you.
-    Vector3 Target()
+    // ------------------------------------------------------------ where it can stand
+
+    // Places to try, as (metres ahead, metres to the right) of the visitor, best first.
+    // All are in front, so it never ends up behind you; the last ones are wider to the side
+    // for tight corridors and doorways.
+    static readonly Vector2[] Spots =
+    {
+        new Vector2(0f, 0f),                                   // filled in from followDistance / sideOffset
+        new Vector2(0f, 0f),
+        new Vector2(1.4f,  0.5f), new Vector2(1.4f, -0.5f),
+        new Vector2(1.1f,  0.6f), new Vector2(1.1f, -0.6f),
+        new Vector2(2.2f,  0.4f), new Vector2(2.2f, -0.4f),
+        new Vector2(0.9f,  0.3f), new Vector2(0.9f, -0.3f),
+        new Vector2(0.9f,  0.8f), new Vector2(0.9f, -0.8f),
+        new Vector2(0.5f,  1.0f), new Vector2(0.5f, -1.0f),
+    };
+
+    /// Finds a spot in front of the visitor where the guide's whole body fits, there is floor
+    /// under it, and the visitor can see it (no wall in between).
+    bool FindSpot(out Vector3 result)
     {
         Vector3 hp = head.position;
         var yaw = Quaternion.Euler(0f, head.eulerAngles.y, 0f);
         Vector3 fwd = yaw * Vector3.forward, right = yaw * Vector3.right;
         Vector3 basePos = new Vector3(hp.x, FloorY(), hp.z);
 
-        for (int i = 0; i < 5; i++)
+        Spots[0] = new Vector2(followDistance,  sideOffset);
+        Spots[1] = new Vector2(followDistance, -sideOffset);
+
+        foreach (var s in Spots)
         {
-            Vector3 t;
-            switch (i)
-            {
-                case 0:  t = basePos + fwd * followDistance + right * sideOffset; break;
-                case 1:  t = basePos + fwd * followDistance - right * sideOffset; break;
-                case 2:  t = basePos + fwd * 1.1f + right * 0.45f; break;
-                case 3:  t = basePos + fwd * 1.1f - right * 0.45f; break;
-                default: t = basePos + fwd * 0.8f; break;
-            }
-            if (LineClear(hp, t + Vector3.up * 1.2f)) return t;
+            Vector3 c = basePos + fwd * s.x + right * s.y;
+            if (LineClear(hp, c + Vector3.up * 1.2f) && SpotFree(c)) { result = c; return true; }
         }
-        return basePos + fwd * 0.7f;            // facing a wall up close: hover right in front
+        result = basePos;
+        return false;
+    }
+
+    /// Room for the guide's body at these feet, and real floor under it (not a void outside the building).
+    bool SpotFree(Vector3 feet)
+    {
+        float y = FloorY();
+        Vector3 a = new Vector3(feet.x, y + BodyBottom + BodyRadius, feet.z);
+        Vector3 b = new Vector3(feet.x, y + BodyTop - BodyRadius, feet.z);
+        int n = Physics.OverlapCapsuleNonAlloc(a, b, BodyRadius + 0.05f, overlap, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < n; i++)
+            if (Blocks(overlap[i])) return false;
+
+        RaycastHit hit;
+        if (!Physics.Raycast(new Vector3(feet.x, y + 1f, feet.z), Vector3.down, out hit, 1.6f, ~0, QueryTriggerInteraction.Ignore))
+            return false;
+        return hit.point.y < y + 0.3f;
+    }
+
+    /// Can the guide's body travel in a straight line from one spot to another without
+    /// touching a wall, door, plinth or exhibit?
+    bool PathClear(Vector3 fromFeet, Vector3 toFeet)
+    {
+        Vector3 d = new Vector3(toFeet.x - fromFeet.x, 0f, toFeet.z - fromFeet.z);
+        float len = d.magnitude;
+        if (len < 0.01f) return true;
+
+        float y = FloorY();
+        Vector3 a = new Vector3(fromFeet.x, y + BodyBottom + BodyRadius, fromFeet.z);
+        Vector3 b = new Vector3(fromFeet.x, y + BodyTop - BodyRadius, fromFeet.z);
+        int n = Physics.CapsuleCastNonAlloc(a, b, BodyRadius, d / len, buf, len, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < n; i++)
+            if (Blocks(buf[i].collider)) return false;
+        return true;
+    }
+
+    /// Solid things the guide must keep out of: everything except the visitor and the guide itself.
+    bool Blocks(Collider c)
+    {
+        if (c == null || c.isTrigger) return false;
+        if (c == playerCC || (rig != null && c.transform.IsChildOf(rig))) return false;
+        if (c.GetComponentInParent<DocentButton>() != null) return false;     // its own body and panel
+        return true;
     }
 
     bool LineClear(Vector3 a, Vector3 b)
