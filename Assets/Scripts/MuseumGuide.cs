@@ -34,9 +34,9 @@ public class MuseumGuide : MonoBehaviour
     public int    maxTokens = 140;          // ~55 words plus slack
     public float  temperature = 0.6f;
 
-    public float followDistance = 1.8f;     // where it likes to hover, ahead of you...
-    public float sideOffset     = 1.1f;     // ...and to your right
-    public float stayRadius     = 3.5f;     // it only follows once you are further than this
+    public float followDistance = 1.7f;     // always hovers ahead of you...
+    public float sideOffset     = 0.75f;    // ...a little to the right, so it does not block the view or your right-hand ray
+    public float comfortAngle   = 25f;      // turn your head further than this and it glides back in front
 
     /// Set by VRInteractor: what the visitor is holding right now (null if nothing).
     public Func<Inspectable> heldProvider;
@@ -74,6 +74,8 @@ public class MuseumGuide : MonoBehaviour
     string warmProblem;
     bool  greeted;
     float lostSight;
+    bool  catchingUp = true;      // glide to the target on the first frames
+    Vector3 followVel;
     float bobPhase;
 
     readonly HashSet<Inspectable> inspected = new HashSet<Inspectable>();
@@ -164,7 +166,7 @@ public class MuseumGuide : MonoBehaviour
 
         // the whole character is one "talk to me" target
         var col = docent.gameObject.AddComponent<CapsuleCollider>();
-        col.center = new Vector3(0f, 0.95f, 0f); col.radius = 0.4f; col.height = 1.9f;
+        col.center = new Vector3(0f, 0.95f, 0f); col.radius = 0.3f; col.height = 1.9f;
         var b = docent.gameObject.AddComponent<DocentButton>();
         b.kind = DocentButton.Kind.Talk; b.guide = this;
         b.prompt = "[T1]  talk to Haku, the guide";
@@ -264,29 +266,36 @@ public class MuseumGuide : MonoBehaviour
         Vector3 dp = docent.position;
         float floorY = FloorY();
 
-        Vector3 flat = new Vector3(dp.x - hp.x, 0f, dp.z - hp.z);
-        float dist = flat.magnitude;
+        Vector3 target = Target();
+        Vector3 toGuide  = new Vector3(dp.x - hp.x, 0f, dp.z - hp.z);
+        Vector3 toTarget = new Vector3(target.x - hp.x, 0f, target.z - hp.z);
+        float dist = toGuide.magnitude;
 
-        // Can the visitor see the guide? (Checked against walls only.)
+        // A wall between you (you went through a door or round a corner): re-appear in front
+        // straight away rather than gliding through the wall.
         lostSight = LineClear(hp, dp + Vector3.up * 1.2f) ? 0f : lostSight + Time.deltaTime;
-
-        if (open)
+        if (lostSight > 0.3f || dist > 6f)
         {
-            if (dist > 6f || lostSight > 1f) SetOpen(false);     // walked off: close the panel
-        }
-        else if (lostSight > 1f || dist > 9f)
-        {
-            docent.position = Target();                           // catch up by re-appearing, not by crossing walls
+            docent.position = new Vector3(target.x, dp.y, target.z);
             lostSight = 0f;
+            catchingUp = false;
+            followVel = Vector3.zero;
         }
-        else if (dist > stayRadius || dist < 0.9f)
+        else
         {
-            Vector3 t = Target();
-            Vector3 flatPos = new Vector3(dp.x, 0f, dp.z);
-            Vector3 flatTgt = new Vector3(t.x, 0f, t.z);
-            float speed = Mathf.Clamp(dist, 1.5f, 5f);
-            Vector3 moved = Vector3.MoveTowards(flatPos, flatTgt, speed * Time.deltaTime);
-            docent.position = new Vector3(moved.x, dp.y, moved.z);
+            // Lazy follow, like a headset menu: small head movements leave it where it is (so the
+            // panel holds still while you aim at a button); once it drifts out of the comfortable
+            // zone in front of you it glides back.
+            float off = (dist > 0.01f && toTarget.sqrMagnitude > 0.01f) ? Vector3.Angle(toGuide, toTarget) : 0f;
+            if (off > comfortAngle || dist < 0.9f || dist > followDistance + 1f) catchingUp = true;
+
+            if (catchingUp)
+            {
+                Vector3 cur = new Vector3(dp.x, 0f, dp.z), tgt = new Vector3(target.x, 0f, target.z);
+                Vector3 next = Vector3.SmoothDamp(cur, tgt, ref followVel, 0.25f, 8f);
+                docent.position = new Vector3(next.x, dp.y, next.z);
+                if ((next - tgt).sqrMagnitude < 0.0025f) catchingUp = false;     // within 5 cm: settle
+            }
         }
 
         // hover a little and face the visitor
@@ -317,26 +326,29 @@ public class MuseumGuide : MonoBehaviour
 
     float FloorY() { return rig != null ? rig.position.y : 0f; }
 
-    /// Where the guide would like to be: ahead and to the visitor's right, kept inside the walls.
+    /// Where the guide wants to be: in front of the visitor, slightly to the right, and always
+    /// on this side of any wall. Every option is in front, so it never ends up behind you.
     Vector3 Target()
     {
         Vector3 hp = head.position;
         var yaw = Quaternion.Euler(0f, head.eulerAngles.y, 0f);
         Vector3 fwd = yaw * Vector3.forward, right = yaw * Vector3.right;
-        float y = FloorY();
-        Vector3 basePos = new Vector3(hp.x, y, hp.z);
+        Vector3 basePos = new Vector3(hp.x, FloorY(), hp.z);
 
-        Vector3[] tries =
+        for (int i = 0; i < 5; i++)
         {
-            basePos + fwd * followDistance + right * sideOffset,
-            basePos + fwd * followDistance - right * sideOffset,
-            basePos + fwd * 0.9f,
-            basePos - fwd * 0.9f + right * 0.6f,
-        };
-        foreach (var t in tries)
+            Vector3 t;
+            switch (i)
+            {
+                case 0:  t = basePos + fwd * followDistance + right * sideOffset; break;
+                case 1:  t = basePos + fwd * followDistance - right * sideOffset; break;
+                case 2:  t = basePos + fwd * 1.1f + right * 0.45f; break;
+                case 3:  t = basePos + fwd * 1.1f - right * 0.45f; break;
+                default: t = basePos + fwd * 0.8f; break;
+            }
             if (LineClear(hp, t + Vector3.up * 1.2f)) return t;
-
-        return basePos + right * 0.9f;          // walled in on every side: stay close
+        }
+        return basePos + fwd * 0.7f;            // facing a wall up close: hover right in front
     }
 
     bool LineClear(Vector3 a, Vector3 b)
