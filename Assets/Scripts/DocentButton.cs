@@ -8,7 +8,7 @@ using UnityEngine;
 
 public class DocentButton : MonoBehaviour
 {
-    public enum Kind { Talk, Question, Close }
+    public enum Kind { Talk, Question, Close, Panel }    // Panel: the panel's background - stops rays, does nothing
 
     public Kind         kind;
     public MuseumGuide  guide;

@@ -16,27 +16,31 @@ using UnityEngine.Networking;
 //   * Point at it and press T1 to open a panel. The panel shows the guide's last answer and
 //     a few preset question buttons (a headset has no keyboard, and Ollama cannot do speech
 //     recognition). Point at a button and press T1.
+//   * Or hold A and just ask out loud (GuideVoice: local Whisper speech-to-text); Haku
+//     reads its answers aloud with the Windows voice.
 //   * Each question is sent to a LOCAL Ollama server together with what the visitor is
 //     looking at: the exhibit they hold, or the nearest one, plus the other exhibits and
 //     which they have already inspected. The model writes a short answer.
 //
 // SETTINGS are the public fields below. To use a different model, change `model` (it must be
-// one you have pulled: `ollama list`). `ollamaUrl` is localhost, which only works while the game
+// one you have pulled: `ollama list`). `ollamaUrl` is this PC (127.0.0.1), which only works while the game
 // runs on the same PC as Ollama (Editor + Quest Link). A standalone Quest build would need
 // this PC's Wi-Fi address here and Ollama started with OLLAMA_HOST=0.0.0.0.
 
 public class MuseumGuide : MonoBehaviour
 {
     // ------------------------------------------------------------ settings
-    public string ollamaUrl = "http://localhost:11434";
+    public string ollamaUrl = "http://127.0.0.1:11434";   // not "localhost": Unity tries IPv6 first, Ollama listens on IPv4
     public string model     = "qwen3:8b";
-    public string keepAlive = "30m";        // keep the model in memory between questions
+    public string keepAlive = "4h";         // keep the model loaded through a whole demo session (a cold load is ~30-40 s)
     public int    maxTokens = 140;          // ~55 words plus slack
     public float  temperature = 0.6f;
 
     public float followDistance = 1.7f;     // always hovers ahead of you...
     public float sideOffset     = 0.75f;    // ...a little to the right, so it does not block the view or your right-hand ray
-    public float comfortAngle   = 25f;      // turn your head further than this and it glides back in front
+    public float comfortAngle     = 45f;    // it only moves once it is this far from where you are looking...
+    public float openComfortAngle = 55f;    // ...or this far while its panel is open (so you can look across the buttons)
+    public float viewAngle        = 55f;    // roughly the edge of the Quest 3 view: it only pops across a plinth/doorway once it is past this
 
     /// Set by VRInteractor: what the visitor is holding right now (null if nothing).
     public Func<Inspectable> heldProvider;
@@ -48,6 +52,9 @@ public class MuseumGuide : MonoBehaviour
         "Reply in 2 or 3 short sentences, at most 55 words, in plain text: no markdown, lists, emojis or stage directions. " +
         "Use the CONTEXT for what the visitor is looking at. Do not invent exact dates, names or facts the context does not " +
         "support; if you are unsure, say so briefly. Speak directly and warmly to the visitor.";
+
+    const string Greeting = "Hello! I'm Haku, your guide. Pick a question below, or hold A and ask me anything out loud.";
+    const string Waking   = "Hello! I'm Haku. One moment - I'm just waking up...";
 
     static readonly string[] Labels =
     {
@@ -70,15 +77,29 @@ public class MuseumGuide : MonoBehaviour
     TextMesh  replyText;
     Shader    solid;
 
-    bool  open, busy, ready;
+    bool  open, busy, ready, warming;
+    bool  idle = true;            // the panel shows IdleText() (not a transient status like "Listening...")
+    string lastAnswer;            // the last answer, shown again whenever the panel is idle
+    float nextRetry;              // when to try Ollama again after a failed warm-up
+    bool  probeOk;                // Ollama answered; the model load is in progress
+    float loadStart;
+    bool  wakingShown;
+    bool  unreachableProblem;     // warmProblem means "can't connect" (vs "connected but the load failed")
+    string statusText;            // the transient status on show (Listening..., thinking...)
+    TextMesh statusLine;          // shows that status in front of you when the panel can't be seen
+    string statusLineShown;
+    GuideVoice voice;
+    bool  talkHeld;
     string warmProblem;
-    bool  greeted;
     bool  catchingUp;
     Vector3 followVel;
     Vector3 spot;                 // where it wants to stand (feet, at floor level)
-    bool  hasSpot, hereOk = true;
+    bool  hasSpot, hereOk = true, panelBlocked;
     float nextCheck;
     float appearT = 1f;           // 0..1 while popping back in after a jump
+    bool  hidden;                 // no room anywhere in front of you: out of the way until there is
+    Renderer[] bodyRenderers;
+    Collider   bodyCollider;
 
     // The guide's body for space checks: a capsule from 0.25 m to 1.75 m above the floor.
     const float BodyRadius = 0.3f, BodyBottom = 0.25f, BodyTop = 1.75f;
@@ -112,12 +133,80 @@ public class MuseumGuide : MonoBehaviour
         BuildDocent();
         BuildPanel();
         panel.gameObject.SetActive(false);
-        docent.position = FindSpot(out spot) ? spot : head.position + Vector3.ProjectOnPlane(head.forward, Vector3.up).normalized;
+        Hide();                                        // placed by Update once head tracking is live
+
+        statusLine = Text(head, "", 0.03f, TextAnchor.UpperCenter, TextAlignment.Center,
+                          new Vector3(0f, -0.2f, 0.9f), new Color(1f, 0.88f, 0.5f));
+        MuseumText.ApplyOverlay(statusLine);
+        statusLine.gameObject.SetActive(false);
+
+        // Voice: hold A to ask out loud, answers are spoken. A failure here must not stop the guide.
+        try
+        {
+            voice = gameObject.AddComponent<GuideVoice>();
+            voice.Init(docent);
+            voice.OnStatus = s => { if (!open) SetOpen(true); ShowStatus(s); };
+            voice.OnNothingHeard = ShowIdle;                     // A was only tapped: put the panel back
+            voice.OnHeard  = q =>
+            {
+                if (busy) { ShowStatus("One moment - I'm still answering. Ask me again when I've finished."); return; }
+                StartCoroutine(Ask(q, true));
+            };
+        }
+        catch (Exception e) { Debug.LogException(e); voice = null; }
 
         StartCoroutine(WarmUp());
     }
 
     public void NoteInspected(Inspectable item) { if (item != null) inspected.Add(item); }
+
+    /// True while Haku's panel is open and on screen (VRInteractor keeps its own labels off it).
+    public bool PanelShowing { get { return open && panel != null && panel.gameObject.activeSelf; } }
+
+    // The panel hangs between Haku and you: this high above his feet, this far towards you.
+    const float PanelHeight = 1.45f + 0.12f, PanelOut = 0.35f;
+
+    /// Called every frame by VRInteractor with whether A is held: press starts listening,
+    /// release sends what was said.
+    public void PushToTalk(bool held)
+    {
+        bool pressed = held && !talkHeld, released = !held && talkHeld;
+        talkHeld = held;                       // first, so a failure below cannot repeat every frame
+        if (voice == null || (!pressed && !released)) return;
+        try
+        {
+            if (pressed)
+            {
+                if (!open) SetOpen(true);
+                if (busy) ShowStatus("One moment - I'm still answering. Hold A again when I've finished.");
+                else      voice.BeginListening();
+            }
+            else voice.EndListening();
+        }
+        catch (Exception e)
+        {
+            Debug.LogException(e);
+            ShowStatus("Sorry, I can't use the microphone right now.");
+        }
+    }
+
+    /// Stopping Play: tell Ollama to free the GPU memory now instead of holding the model for keepAlive.
+    void OnApplicationQuit()
+    {
+        if (!ready && !warming) return;
+        try
+        {
+            string url = Url("/api/generate").Replace("://localhost", "://127.0.0.1");
+            var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+            req.Method = "POST";
+            req.ContentType = "application/json";
+            req.Timeout = 1500;
+            byte[] body = Encoding.UTF8.GetBytes("{\"model\":\"" + model + "\",\"keep_alive\":0}");
+            using (var s = req.GetRequestStream()) s.Write(body, 0, body.Length);
+            using (req.GetResponse()) { }
+        }
+        catch { /* Ollama already gone - nothing to free */ }
+    }
 
     void OnDestroy()
     {
@@ -174,6 +263,8 @@ public class MuseumGuide : MonoBehaviour
         // the whole character is one "talk to me" target
         var col = docent.gameObject.AddComponent<CapsuleCollider>();
         col.center = new Vector3(0f, 0.95f, 0f); col.radius = 0.3f; col.height = 1.9f;
+        bodyCollider   = col;
+        bodyRenderers  = docent.GetComponentsInChildren<Renderer>(true);
         var b = docent.gameObject.AddComponent<DocentButton>();
         b.kind = DocentButton.Kind.Talk; b.guide = this;
         b.prompt = "[T1]  talk to Haku, the guide";
@@ -200,6 +291,12 @@ public class MuseumGuide : MonoBehaviour
         bg.transform.SetParent(panel, false);
         bg.transform.localScale = new Vector3(W, H, 1f);
         bg.GetComponent<Renderer>().sharedMaterial = Solid(new Color(0.07f, 0.07f, 0.09f), 0f);
+        var bgCol = bg.AddComponent<BoxCollider>();
+        bgCol.center = new Vector3(0f, 0f, 0.02f);      // just BEHIND the buttons (their faces are at z = -0.015)
+        bgCol.size   = new Vector3(1.04f, 1.04f, 0.01f);
+        IgnorePlayer(bgCol);
+        var bgBtn = bg.AddComponent<DocentButton>();
+        bgBtn.kind = DocentButton.Kind.Panel; bgBtn.guide = this;   // no prompt, Press ignores it
 
         Text(panel, "Haku - museum guide", 0.05f, TextAnchor.UpperLeft, TextAlignment.Left,
              new Vector3(-W * 0.5f + 0.06f, H * 0.5f - 0.05f, -0.01f), new Color(1f, 0.85f, 0.45f));
@@ -216,6 +313,9 @@ public class MuseumGuide : MonoBehaviour
             MakeButton(panel, close ? "Close" : Labels[i], close ? null : Questions[i],
                        close ? DocentButton.Kind.Close : DocentButton.Kind.Question, new Vector3(x, y, -0.005f));
         }
+
+        Text(panel, "or hold [A] and ask me anything out loud", 0.03f, TextAnchor.MiddleCenter, TextAlignment.Center,
+             new Vector3(0f, -H * 0.5f + 0.05f, -0.01f), new Color(1f, 0.85f, 0.45f));
     }
 
     void MakeButton(Transform parent, string label, string question, DocentButton.Kind kind, Vector3 pos)
@@ -232,7 +332,7 @@ public class MuseumGuide : MonoBehaviour
         r.sharedMaterial = Solid(idle, 0f);
 
         var box = plate.AddComponent<BoxCollider>();
-        box.size = new Vector3(1f, 1f, 0.25f);          // thick enough in Z for the ray to hit reliably
+        box.size = new Vector3(1f, 1f, 0.02f);          // thin: a deep box makes slanted rays pick the neighbouring button
         IgnorePlayer(box);
 
         var b = plate.AddComponent<DocentButton>();
@@ -274,51 +374,88 @@ public class MuseumGuide : MonoBehaviour
         float floorY = FloorY();
         Vector3 feet = new Vector3(dp.x, floorY, dp.z);
 
+        // Until head tracking is live the camera sits at the rig's floor: placing Haku then would put
+        // him somewhere arbitrary (e.g. dead centre in front of the entry door). Wait, hidden.
+        if (hp.y - floorY < 0.6f) { if (!hidden) Hide(); return; }
+
         // Re-plan ten times a second: where should it stand, and is where it stands still OK?
         if (Time.time >= nextCheck)
         {
             nextCheck = Time.time + 0.1f;
             hasSpot = FindSpot(out spot);
             hereOk  = SpotFree(feet) && LineClear(hp, feet + Vector3.up * 1.2f);
+            panelBlocked = open && !hidden && hereOk && !PanelFree(feet, hp);
         }
 
-        if (hasSpot)
+        // A model load has been running for a second: switch an idle panel to "waking up".
+        if (open && idle && !wakingShown && LoadingSlowly()) { wakingShown = true; ShowIdle(); }
+
+        // Ollama wasn't reachable: keep trying quietly (a refused connection fails at once).
+        if (warmProblem != null && !warming && !busy && Time.time >= nextRetry)
         {
-            Vector3 toGuide = new Vector3(dp.x - hp.x, 0f, dp.z - hp.z);
-            Vector3 toSpot  = new Vector3(spot.x - hp.x, 0f, spot.z - hp.z);
-            float dist = toGuide.magnitude;
+            nextRetry = Time.time + 10f;
+            StartCoroutine(WarmUp());
+        }
 
-            if (!hereOk)
-            {
-                // Standing somewhere it must not be (a door swung into it, a wall is now between
-                // you): re-appear at the free spot rather than staying in, or behind, the wall.
-                Appear(spot);
-            }
-            else
-            {
-                // Lazy follow, like a headset menu: small head movements leave it where it is (so the
-                // panel holds still while you aim at a button); once it drifts out of the comfortable
-                // zone in front of you it moves back.
-                float off = (dist > 0.01f && toSpot.sqrMagnitude > 0.01f) ? Vector3.Angle(toGuide, toSpot) : 0f;
-                if (off > comfortAngle || dist < 0.8f || dist > followDistance + 1f) catchingUp = true;
+        Vector3 toGuide = new Vector3(dp.x - hp.x, 0f, dp.z - hp.z);
+        float dist = toGuide.magnitude;
 
-                if (catchingUp)
+        if (!hasSpot)
+        {
+            // No room anywhere in front of you (e.g. right up against a wall or a closed door):
+            // rather than stand in your face, or behind the wall, step out of sight until there is.
+            if (!hidden && (!hereOk || dist < 0.9f)) Hide();
+        }
+        else if (hidden || !hereOk)
+        {
+            // Back from hiding, or standing somewhere it must not be (a door swung into it, a wall
+            // is now between you): re-appear at the free spot rather than in, or behind, the wall.
+            Appear(spot);
+        }
+        else
+        {
+            // Lazy follow, like a headset menu: while it is still comfortably in view it stays
+            // exactly where it is - so small head movements (or its ideal spot flipping sides next
+            // to a plinth) never move it, and the open panel holds still while you aim at it.
+            // It moves to the planned spot only when it drifts out of view or gets too close or
+            // too far - and never chases a spot it is already standing on (a wide spot in a
+            // tight corner may itself be further off-centre than the comfort angle).
+            Vector3 look = head.forward; look.y = 0f;
+            Vector3 toSpot = new Vector3(spot.x - hp.x, 0f, spot.z - hp.z);
+            bool lookOk = look.sqrMagnitude > 0.001f;
+            float off     = (lookOk && dist > 0.01f) ? Vector3.Angle(look, toGuide) : 0f;
+            float spotOff = (lookOk && toSpot.sqrMagnitude > 0.01f) ? Vector3.Angle(look, toSpot) : 0f;
+            float limit   = Mathf.Max(open ? openComfortAngle : comfortAngle, spotOff + 10f);
+            float fromSpot = new Vector2(feet.x - spot.x, feet.z - spot.z).magnitude;
+            // Open panel: keep it at a readable distance - but only move for that if there is a
+            // further spot to go to (otherwise it would hop between two equally close ones).
+            bool badDistance  = dist < 0.8f || dist > followDistance + 1f ||
+                                (open && dist < 1.2f && toSpot.magnitude > dist + 0.2f);
+            bool uncomfortable = off > limit || badDistance || panelBlocked;
+            // A spot that is itself out of view (a tight corner) is not worth chasing for comfort.
+            bool worthIt = spotOff <= viewAngle || badDistance || panelBlocked;
+            if (uncomfortable && fromSpot > 0.15f && worthIt) catchingUp = true;
+
+            if (catchingUp)
+            {
+                if (!PathClear(feet, spot) || PassesNear(feet, spot, hp, 0.6f))
                 {
-                    if (!PathClear(feet, spot))
-                    {
-                        Appear(spot);          // a wall, door or plinth is in the way: never glide through it
-                    }
-                    else
-                    {
-                        Vector3 cur = new Vector3(dp.x, 0f, dp.z), tgt = new Vector3(spot.x, 0f, spot.z);
-                        Vector3 next = Vector3.SmoothDamp(cur, tgt, ref followVel, 0.25f, 8f);
-                        docent.position = new Vector3(next.x, dp.y, next.z);
-                        if ((next - tgt).sqrMagnitude < 0.0025f) catchingUp = false;     // within 5 cm: settle
-                    }
+                    // A wall, door or plinth is in the way, or the way runs through you: never glide
+                    // through it. Pop across - but only once it has really left your view (or is too
+                    // close/far); while you can still see it, it just stays put. This is what stops
+                    // it hopping over a plinth every time you glance around an exhibit.
+                    if (off > viewAngle || badDistance || panelBlocked) Appear(spot);
+                    else { catchingUp = false; followVel = Vector3.zero; }
+                }
+                else
+                {
+                    Vector3 cur = new Vector3(dp.x, 0f, dp.z), tgt = new Vector3(spot.x, 0f, spot.z);
+                    Vector3 next = Vector3.SmoothDamp(cur, tgt, ref followVel, 0.25f, 8f);
+                    docent.position = new Vector3(next.x, dp.y, next.z);
+                    if ((next - tgt).sqrMagnitude < 0.0025f) catchingUp = false;     // within 5 cm: settle
                 }
             }
         }
-        // (no free spot anywhere in front - e.g. squeezed in a doorway - so it simply stays put)
 
         // pop back in after a jump
         if (appearT < 1f)
@@ -344,21 +481,71 @@ public class MuseumGuide : MonoBehaviour
     void Appear(Vector3 at)
     {
         docent.position = new Vector3(at.x, docent.position.y, at.z);
+        Vector3 face = head.position - docent.position; face.y = 0f;
+        if (face.sqrMagnitude > 0.01f) docent.rotation = Quaternion.LookRotation(face.normalized, Vector3.up);
         catchingUp = false;
         followVel  = Vector3.zero;
         hereOk     = true;
         appearT    = 0f;
+        if (hidden)
+        {
+            hidden = false;
+            foreach (var r in bodyRenderers) if (r != null) r.enabled = true;
+            if (bodyCollider != null) bodyCollider.enabled = true;
+            if (open) panel.gameObject.SetActive(true);
+        }
+    }
+
+    /// Out of sight and out of the way (renderers and collider off - the AudioSource keeps playing).
+    void Hide()
+    {
+        hidden     = true;
+        catchingUp = false;
+        followVel  = Vector3.zero;
+        foreach (var r in bodyRenderers) if (r != null) r.enabled = false;
+        if (bodyCollider != null) bodyCollider.enabled = false;
+        if (open) panel.gameObject.SetActive(false);
+    }
+
+    void SetStatusLine(string s)
+    {
+        if (statusLine == null || ReferenceEquals(s, statusLineShown)) return;
+        statusLineShown = s;
+        statusLine.gameObject.SetActive(s != null);
+        if (s != null) statusLine.text = Wrap(s, 44, 3);
+    }
+
+    /// Does the straight line between two floor points pass within `radius` of the visitor's head?
+    static bool PassesNear(Vector3 a, Vector3 b, Vector3 headPos, float radius)
+    {
+        Vector2 p = new Vector2(headPos.x, headPos.z), s = new Vector2(a.x, a.z), e = new Vector2(b.x, b.z);
+        Vector2 d = e - s;
+        float t = d.sqrMagnitude > 1e-6f ? Mathf.Clamp01(Vector2.Dot(p - s, d) / d.sqrMagnitude) : 0f;
+        return (s + d * t - p).sqrMagnitude < radius * radius;
     }
 
     void LateUpdate()
     {
-        if (!open || panel == null || head == null) return;
+        if (panel == null || head == null) return;
+        if (!open) { SetStatusLine(null); return; }
 
         Vector3 toHead = head.position - docent.position; toHead.y = 0f;
         if (toHead.sqrMagnitude < 0.01f) return;
         Vector3 n = toHead.normalized;
 
-        panel.position = docent.position + Vector3.up * 1.45f + n * 0.35f;
+        // The panel goes with Haku: hidden while he is hidden or out of view (e.g. you are right up
+        // against a wall), so it never pops up beside your head. Then "Listening..." and the like
+        // appear as a short line in front of you instead; answers are still spoken.
+        Vector3 look = head.forward; look.y = 0f;
+        float edge = panel.gameObject.activeSelf ? viewAngle + 5f : viewAngle - 5f;    // no blinking at the edge
+        bool inView = look.sqrMagnitude < 0.001f || Vector3.Angle(look, -n) <= edge;
+        bool show = !hidden && inView;
+        if (panel.gameObject.activeSelf != show) panel.gameObject.SetActive(show);
+        bool inProgress = busy || (voice != null && (voice.IsRecording || voice.IsBusy));
+        SetStatusLine(show || idle || !inProgress ? null : statusText);   // Listening / one moment / thinking only
+        if (!show) return;
+
+        panel.position = new Vector3(docent.position.x, FloorY() + PanelHeight, docent.position.z) + n * PanelOut;
         panel.rotation = Quaternion.LookRotation(-n, Vector3.up);   // +Z away from the visitor
     }
 
@@ -366,23 +553,19 @@ public class MuseumGuide : MonoBehaviour
 
     // ------------------------------------------------------------ where it can stand
 
-    // Places to try, as (metres ahead, metres to the right) of the visitor, best first.
-    // All are in front, so it never ends up behind you; the last ones are wider to the side
-    // for tight corridors and doorways.
-    static readonly Vector2[] Spots =
-    {
-        new Vector2(0f, 0f),                                   // filled in from followDistance / sideOffset
-        new Vector2(0f, 0f),
-        new Vector2(1.4f,  0.5f), new Vector2(1.4f, -0.5f),
-        new Vector2(1.1f,  0.6f), new Vector2(1.1f, -0.6f),
-        new Vector2(2.2f,  0.4f), new Vector2(2.2f, -0.4f),
-        new Vector2(0.9f,  0.3f), new Vector2(0.9f, -0.3f),
-        new Vector2(0.9f,  0.8f), new Vector2(0.9f, -0.8f),
-        new Vector2(0.5f,  1.0f), new Vector2(0.5f, -1.0f),
-    };
+    // Places to try, as (metres ahead, metres to the side) of the visitor, best first. All are in
+    // front, so it never ends up behind you. Comfortable spots (within ~30 deg of where you look)
+    // come first; the wider ones are for plinths, tight corridors, doorways and corners.
+    static readonly Vector2[] Comfy = { new Vector2(0f, 0f) /* followDistance, sideOffset */, new Vector2(1.4f, 0.5f),
+                                        new Vector2(1.1f, 0.6f), new Vector2(2.2f, 0.4f), new Vector2(0.9f, 0.3f) };
+    static readonly Vector2[] Near  = { new Vector2(0.9f, 0.8f) };     // ~42 deg: still in view
+    static readonly Vector2[] Tight = { new Vector2(0.5f, 1.0f) };     // ~63 deg: last resort for tight corners
 
     /// Finds a spot in front of the visitor where the guide's whole body fits, there is floor
-    /// under it, and the visitor can see it (no wall in between).
+    /// under it, and the visitor can see it (no wall in between). It keeps to the side it is
+    /// already on: every comfortable spot on that side, and its nearer wide spot, are tried before
+    /// any on the other side, so looking around next to a plinth or in a corridor doesn't make it
+    /// hop across.
     bool FindSpot(out Vector3 result)
     {
         Vector3 hp = head.position;
@@ -390,16 +573,49 @@ public class MuseumGuide : MonoBehaviour
         Vector3 fwd = yaw * Vector3.forward, right = yaw * Vector3.right;
         Vector3 basePos = new Vector3(hp.x, FloorY(), hp.z);
 
-        Spots[0] = new Vector2(followDistance,  sideOffset);
-        Spots[1] = new Vector2(followDistance, -sideOffset);
+        float side = 1f;                                           // right by default (and before it is placed)
+        if (docent != null && docent.position.sqrMagnitude > 0.0001f &&
+            Vector3.Dot(docent.position - basePos, right) < 0f) side = -1f;
 
-        foreach (var s in Spots)
+        Comfy[0] = new Vector2(followDistance, sideOffset);
+
+        // Own side first - including its nearer, wider spot - before hopping across to the other
+        // side (which next to a plinth means a jump across it); the tight spots come last.
+        // With the panel open, first look only at the further spots so the panel isn't in your face.
+        for (int pass = open ? 0 : 1; pass < 2; pass++)
         {
-            Vector3 c = basePos + fwd * s.x + right * s.y;
-            if (LineClear(hp, c + Vector3.up * 1.2f) && SpotFree(c)) { result = c; return true; }
+            for (int group = 0; group < 6; group++)
+            {
+                Vector2[] list = group < 2 ? Comfy : group < 4 ? Near : Tight;
+                float sgn = (group % 2 == 0) ? side : -side;
+                foreach (var s in list)
+                {
+                    if (pass == 0 && s.x < 1.35f) continue;
+                    Vector3 c = basePos + fwd * s.x + right * (s.y * sgn);
+                    if (!LineClear(hp, c + Vector3.up * 1.2f) || !SpotFree(c)) continue;
+                    if (pass == 0 && !PanelFree(c, hp)) continue;           // the open panel must not cut through anything
+                    result = c;
+                    return true;
+                }
+            }
         }
         result = basePos;
         return false;
+    }
+
+    /// With the panel open: would the panel (which hangs between Haku and you) fit if Haku stood
+    /// here, without cutting through a plinth, an exhibit, a wall or a door?
+    bool PanelFree(Vector3 feet, Vector3 hp)
+    {
+        Vector3 toHead = new Vector3(hp.x - feet.x, 0f, hp.z - feet.z);
+        if (toHead.sqrMagnitude < 0.01f) return false;
+        Vector3 n = toHead.normalized;
+        Vector3 centre = new Vector3(feet.x, FloorY() + PanelHeight, feet.z) + n * PanelOut;
+        int k = Physics.OverlapBoxNonAlloc(centre, new Vector3(0.67f, 0.67f, 0.03f), overlap,
+                                           Quaternion.LookRotation(-n, Vector3.up), ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < k; i++)
+            if (Blocks(overlap[i])) return false;
+        return true;
     }
 
     /// Room for the guide's body at these feet, and real floor under it (not a void outside the building).
@@ -412,10 +628,13 @@ public class MuseumGuide : MonoBehaviour
         for (int i = 0; i < n; i++)
             if (Blocks(overlap[i])) return false;
 
-        RaycastHit hit;
-        if (!Physics.Raycast(new Vector3(feet.x, y + 1f, feet.z), Vector3.down, out hit, 1.6f, ~0, QueryTriggerInteraction.Ignore))
-            return false;
-        return hit.point.y < y + 0.3f;
+        // Real floor just below (ignoring the guide's own body, e.g. while it pops back in).
+        int m = Physics.RaycastNonAlloc(new Vector3(feet.x, y + 1f, feet.z), Vector3.down, buf, 1.6f, ~0, QueryTriggerInteraction.Ignore);
+        float best = float.MaxValue;
+        for (int i = 0; i < m; i++)
+            if (Blocks(buf[i].collider) && buf[i].distance < best) best = buf[i].distance;
+        if (best == float.MaxValue) return false;
+        return (y + 1f - best) < y + 0.3f;
     }
 
     /// Can the guide's body travel in a straight line from one spot to another without
@@ -429,7 +648,7 @@ public class MuseumGuide : MonoBehaviour
         float y = FloorY();
         Vector3 a = new Vector3(fromFeet.x, y + BodyBottom + BodyRadius, fromFeet.z);
         Vector3 b = new Vector3(fromFeet.x, y + BodyTop - BodyRadius, fromFeet.z);
-        int n = Physics.CapsuleCastNonAlloc(a, b, BodyRadius, d / len, buf, len, ~0, QueryTriggerInteraction.Ignore);
+        int n = Physics.CapsuleCastNonAlloc(a, b, BodyRadius + 0.05f, d / len, buf, len, ~0, QueryTriggerInteraction.Ignore);
         for (int i = 0; i < n; i++)
             if (Blocks(buf[i].collider)) return false;
         return true;
@@ -449,7 +668,8 @@ public class MuseumGuide : MonoBehaviour
         Vector3 d = b - a;
         float len = d.magnitude;
         if (len < 0.01f) return true;
-        int n = Physics.RaycastNonAlloc(a, d / len, buf, len, ~0, QueryTriggerInteraction.Ignore);
+        // A thin sphere rather than a ray, so the crack between two closed door leaves doesn't count.
+        int n = Physics.SphereCastNonAlloc(a, 0.08f, d / len, buf, len, ~0, QueryTriggerInteraction.Ignore);
         for (int i = 0; i < n; i++)
         {
             var c = buf[i].collider;
@@ -470,7 +690,8 @@ public class MuseumGuide : MonoBehaviour
             case DocentButton.Kind.Talk:  SetOpen(!open); break;
             case DocentButton.Kind.Close: SetOpen(false); break;
             case DocentButton.Kind.Question:
-                if (!busy) StartCoroutine(Ask(b.question));
+                bool listening = voice != null && (voice.IsRecording || voice.IsBusy);
+                if (!busy && !listening) StartCoroutine(Ask(b.question));
                 break;
         }
     }
@@ -478,21 +699,34 @@ public class MuseumGuide : MonoBehaviour
     void SetOpen(bool value)
     {
         open = value;
-        panel.gameObject.SetActive(value);
+        panel.gameObject.SetActive(value && !hidden);              // LateUpdate keeps it in step with Haku
         if (!value) return;
 
-        if (!greeted)
-        {
-            greeted = true;
-            SetReply(warmProblem != null
-                ? "Hello! I'm Haku. I can't reach my thinking cap right now: " + warmProblem
-                : "Hello! I'm Haku, your guide. Pick a question below and I'll tell you what I know.");
-        }
+        if (warmProblem != null && !warming) nextRetry = 0f;      // try Ollama again right away
+        bool listening = voice != null && (voice.IsRecording || voice.IsBusy);
+        if (!busy && !listening) ShowIdle();                      // otherwise a status is on show
     }
+
+    /// What the panel shows when nothing is happening: a problem if Ollama can't be reached,
+    /// "waking up" while the model loads, otherwise the last answer or the greeting.
+    string IdleText()
+    {
+        if (LoadingSlowly())     return Waking;                 // Ollama is there and the model is loading
+        if (warmProblem != null) return "Sorry - I can't reach my thinking cap right now: " + warmProblem;
+        if (!ready)              return Waking;                 // first load of this Play
+        return lastAnswer ?? Greeting;
+    }
+
+    // Only say "waking up" once a load has taken over a second - a quick failure (e.g. model not
+    // installed) then never flashes "waking up" over its error message.
+    bool LoadingSlowly() { return warming && probeOk && (warmProblem == null || unreachableProblem) && Time.time - loadStart > 1f; }
+
+    void ShowIdle()             { idle = true;  SetReply(IdleText()); }
+    void ShowStatus(string s)   { idle = false; statusText = s; SetReply(s); }
 
     void SetReply(string text)
     {
-        if (replyText != null) replyText.text = Wrap(text, 44, 9);
+        if (replyText != null) replyText.text = Wrap(text, 44, 12);   // 12 lines x ~0.046 m fit between y=+0.50 and the buttons at -0.07
     }
 
     // ============================================================ Ollama
@@ -502,6 +736,28 @@ public class MuseumGuide : MonoBehaviour
     /// Loads the model into memory now, so the first real question is not a 30+ second wait.
     IEnumerator WarmUp()
     {
+        warming = true;
+
+        // 1) Is Ollama there at all? (quick)  2) Load the model (up to ~40 s from cold).
+        using (var probe = UnityWebRequest.Get(Url("/api/version")))
+        {
+            probe.timeout = 5;
+            yield return probe.SendWebRequest();
+            if (probe.result != UnityWebRequest.Result.Success)
+            {
+                warmProblem = "Ollama is not answering at " + ollamaUrl + " (" + probe.error + "). Is it running?";
+                unreachableProblem = true;
+                nextRetry = Time.time + 10f;
+                Debug.LogWarning("[MuseumGuide] " + warmProblem);
+                warming = false;
+                if (open && idle) ShowIdle();
+                yield break;
+            }
+        }
+        probeOk     = true;                                        // reachable: the panel says "waking up" if the load is slow
+        loadStart   = Time.time;
+        wakingShown = false;
+
         string json = JsonUtility.ToJson(new WarmReq { model = model, keep_alive = keepAlive });
         using (var www = Post("/api/generate", json, 180))
         {
@@ -515,15 +771,22 @@ public class MuseumGuide : MonoBehaviour
             else
             {
                 warmProblem = Explain(www);
+                unreachableProblem = www.result == UnityWebRequest.Result.ConnectionError;
+                nextRetry = Time.time + 10f;                       // not straight away after a slow failure
                 Debug.LogWarning("[MuseumGuide] Ollama warm-up failed: " + warmProblem);
             }
         }
+        warming = false;
+        probeOk = false;
+        if (open && idle) ShowIdle();                              // greeting/answer, or a fresh problem - never a stale one
     }
 
-    IEnumerator Ask(string question)
+    IEnumerator Ask(string question, bool spoken = false)
     {
         busy = true;
-        SetReply("Hmm, let me think...");
+        string shortQ = question.Length > 34 ? question.Substring(0, 34).TrimEnd() + "..." : question;   // You: "...": <= 44 chars
+        string asked = spoken ? "You: \"" + shortQ + "\"\n" : "";     // one line, so the answer fits
+        ShowStatus(asked + "Hmm, let me think...");
 
         var msgs = new List<Msg> { new Msg("system", SystemPrompt) };
         msgs.AddRange(history);
@@ -536,11 +799,16 @@ public class MuseumGuide : MonoBehaviour
         };
 
         string answer = null, problem = null;
+        bool unreachable = false;
         using (var www = Post("/api/chat", JsonUtility.ToJson(req), 180))
         {
             yield return www.SendWebRequest();
 
-            if (www.result != UnityWebRequest.Result.Success) problem = Explain(www);
+            if (www.result != UnityWebRequest.Result.Success)
+            {
+                problem = Explain(www);
+                unreachable = www.result == UnityWebRequest.Result.ConnectionError;   // vs. Ollama answered with an error
+            }
             else
             {
                 try
@@ -559,12 +827,29 @@ public class MuseumGuide : MonoBehaviour
             history.Add(new Msg("assistant", answer));
             while (history.Count > 6) history.RemoveAt(0);     // keep the prompt short and quick
             ready = true;
-            SetReply(answer);
+            warmProblem = null;                                  // it clearly works now
+            lastAnswer = asked + answer;
+            ShowIdle();
+            if (voice != null) voice.Speak(answer);
         }
         else
         {
             Debug.LogWarning("[MuseumGuide] " + problem);
-            SetReply("Sorry, I lost my train of thought: " + (problem ?? "no answer") + ".");
+            if (unreachable)
+            {
+                // The panel says Ollama can't be reached, and it is retried in the background
+                // until it works again (then the greeting comes back - no stale answer).
+                warmProblem = problem;
+                unreachableProblem = true;
+                lastAnswer  = null;
+                nextRetry   = Time.time + 2f;
+            }
+            else
+            {
+                // Ollama answered with an error, or the reply was unusable: say so until the next question.
+                lastAnswer = asked + "Sorry, I lost my train of thought: " + (problem ?? "no answer") + ".";
+            }
+            ShowIdle();
         }
         busy = false;
     }
@@ -623,6 +908,7 @@ public class MuseumGuide : MonoBehaviour
         foreach (var it in all)
         {
             if (it == held) continue;
+            if (it.transform.parent != null && it.transform.parent.GetComponentInParent<Inspectable>() != null) continue;   // a part, e.g. the jar's lid
             float d = FlatDistance(it.transform.position);
             if (d < nd) { nd = d; nearest = it; }
         }
@@ -662,21 +948,29 @@ public class MuseumGuide : MonoBehaviour
 
     // ------------------------------------------------------------ text layout
 
-    /// Word-wrap to `width` characters and keep at most `maxLines` lines.
+    /// Word-wrap to `width` characters (keeping the text's own line breaks) and keep at most `maxLines` lines.
     static string Wrap(string s, int width, int maxLines)
     {
         var sb = new StringBuilder();
-        int col = 0, lines = 1;
-        foreach (var w in s.Split(' '))
+        int lines = 0;
+        foreach (var para in s.Split('\n'))
         {
-            if (col + w.Length > width && col > 0)
+            if (++lines > maxLines) { sb.Append("..."); break; }
+            if (lines > 1) sb.Append('\n');
+            int col = 0;
+            bool cut = false;
+            foreach (var w in para.Split(' '))
             {
-                if (++lines > maxLines) { sb.Append("..."); break; }
-                sb.Append('\n'); col = 0;
+                if (col + w.Length > width && col > 0)
+                {
+                    if (++lines > maxLines) { sb.Append("..."); cut = true; break; }
+                    sb.Append('\n'); col = 0;
+                }
+                else if (col > 0) { sb.Append(' '); col++; }
+                sb.Append(w);
+                col += w.Length;
             }
-            else if (col > 0) { sb.Append(' '); col++; }
-            sb.Append(w);
-            col += w.Length;
+            if (cut) break;
         }
         return sb.ToString();
     }

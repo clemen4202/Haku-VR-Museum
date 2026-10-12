@@ -20,6 +20,7 @@ using XRNode         = UnityEngine.XR.XRNode;
 //                  DoorInteract -> open / close
 //   T1 or G1 while holding -> put it back
 //   T1 on the guide character (Haku) or on its panel buttons -> MuseumGuide (local Ollama AI)
+//   A (right)    hold and speak to ask Haku, the AI guide (GuideVoice)
 //   X (left)     show / hide the small debug readout (includes fps)
 //
 // Each controller is read TWO independent ways and the results are merged:
@@ -50,7 +51,7 @@ public class VRInteractor : MonoBehaviour
         public LineRenderer ray;
         public Material   rayMat;
         public Color      rayColor = Color.white;
-        public InputAction pos, rot, pointPos, pointRot, trigger, grip, stick;
+        public InputAction pos, rot, pointPos, pointRot, trigger, grip, stick, primary;
         public XRDevice   dev;
         float nextDeviceLookup;
 
@@ -58,7 +59,7 @@ public class VRInteractor : MonoBehaviour
         public bool  viaInputSystem, viaXrDevice;
         public float trig, gripVal;
         public Vector2 stickVal;
-        public bool  triggerDown, gripDown, primaryDown;
+        public bool  triggerDown, gripDown, primaryDown, primaryHeld;
         float prevTrig, prevGrip; bool prevPrimary;
 
         // what the ray is on; the prompt string is cached so nothing allocates per frame
@@ -69,6 +70,7 @@ public class VRInteractor : MonoBehaviour
         public bool   consumed;       // T1 was pressed on a guide button this frame
         public bool   doorWasOpen;
         public bool   guideOnly;
+        public bool   viaGuide;       // the ray passes through Haku's body to a door/exhibit behind him
         public string prompt;
         public Vector3 aimPoint;
 
@@ -90,11 +92,12 @@ public class VRInteractor : MonoBehaviour
             trigger  = Make(name + " trigger",  "Axis",       d + "trigger");
             grip     = Make(name + " grip",     "Axis",       d + "grip");
             stick    = Make(name + " stick",    "Vector2",    d + "thumbstick", d + "joystick");
+            primary  = Make(name + " primary",  "Button",     d + "primaryButton");
         }
 
         public void Dispose()
         {
-            foreach (var a in new[] { pos, rot, pointPos, pointRot, trigger, grip, stick })
+            foreach (var a in new[] { pos, rot, pointPos, pointRot, trigger, grip, stick, primary })
                 if (a != null) a.Dispose();
         }
 
@@ -156,8 +159,9 @@ public class VRInteractor : MonoBehaviour
 
             triggerDown = trig >= Press && prevTrig < Press;
             gripDown    = gripVal >= Press && prevGrip < Press;
-            primaryDown = xrPrimary && !prevPrimary;
-            prevTrig = trig; prevGrip = gripVal; prevPrimary = xrPrimary;
+            primaryHeld = xrPrimary || (Has(primary) && primary.ReadValue<float>() > 0.5f);
+            primaryDown = primaryHeld && !prevPrimary;
+            prevTrig = trig; prevGrip = gripVal; prevPrimary = primaryHeld;
         }
 
         public void SetRayColor(Color c)
@@ -248,7 +252,7 @@ public class VRInteractor : MonoBehaviour
         Transform parent = head.parent != null ? head.parent : rig;
         left  = MakeHand(parent, "LeftHand",  XRNode.LeftHand,  "Left Controller");
         right = MakeHand(parent, "RightHand", XRNode.RightHand, "Right Controller");
-        label = MakeText("VR Label", rig, 0.01f, 48, TextAnchor.LowerCenter, false);
+        label = MakeText("VR Label", rig, 0.01f, 48, TextAnchor.LowerCenter, true);   // on top: only shown on what you point at
         label.gameObject.SetActive(false);
         hud   = MakeText("VR Debug",  head, 0.0035f, 48, TextAnchor.UpperLeft, true);
         hud.transform.localPosition = new Vector3(-0.30f, 0.16f, 0.85f);
@@ -352,6 +356,7 @@ public class VRInteractor : MonoBehaviour
             left.Poll();
             right.Poll();
             if (left.primaryDown) showDebug = !showDebug;
+            if (guide != null) guide.PushToTalk(right.primaryHeld);   // A = hold to talk
 
             Locomote();
 
@@ -371,7 +376,13 @@ public class VRInteractor : MonoBehaviour
                 // A T1 press that landed on a guide button is not also "put it back".
                 bool putBack = (heldBy.triggerDown && !heldBy.consumed) || left.gripDown || right.gripDown;
                 if (putBack) PutBack();
-                else if (prompt == null) { prompt = heldText; promptAt = held.transform.position + Vector3.up * 0.3f; }
+                else if (prompt == null)
+                {
+                    // With Haku's panel up, the description would sit on top of his answer: just the hint.
+                    bool panelUp = guide != null && guide.PanelShowing;
+                    prompt   = panelUp ? HeldHint : heldText;
+                    promptAt = held.transform.position + Vector3.up * 0.3f;
+                }
             }
 
             ShowLabel(prompt, promptAt);
@@ -425,6 +436,37 @@ public class VRInteractor : MonoBehaviour
         }
 
         Collider col = bi >= 0 ? hitBuf[bi].collider : null;
+        Vector3 labelAt = bi >= 0 ? hitBuf[bi].point : end;
+        bool viaGuide = false;
+
+        // Haku must never stand between you and a door or exhibit: if the ray hits the guide's
+        // body below the head but something you can use is right behind it, aim at that instead.
+        // Pointing at his head always talks to him (and so does holding A).
+        if (col != null && !guideOnly)
+        {
+            var talk = col.GetComponentInParent<DocentButton>();
+            if (talk != null && talk.kind == DocentButton.Kind.Talk && !AimsAtHead(o, d, talk.transform))
+            {
+                int bj = -1;
+                float best2 = float.MaxValue;
+                for (int i = 0; i < n; i++)
+                {
+                    var c = hitBuf[i].collider;
+                    if (c == cc || c.transform.IsChildOf(rig) || c.GetComponentInParent<DocentButton>() != null) continue;
+                    if (hitBuf[i].distance < best2) { best2 = hitBuf[i].distance; bj = i; }
+                }
+                if (bj >= 0)
+                {
+                    var behind = hitBuf[bj].collider;
+                    if (behind.GetComponentInParent<DoorInteract>() != null || behind.GetComponentInParent<Inspectable>() != null)
+                    {
+                        col = behind;
+                        bi  = bj;
+                        viaGuide = true;      // the label stays on Haku's front, where you can see it
+                    }
+                }
+            }
+        }
         if (bi >= 0) end = hitBuf[bi].point;
 
         // Work out what the collider belongs to - only when the ray moves onto a different collider.
@@ -448,16 +490,18 @@ public class VRInteractor : MonoBehaviour
         h.guideOnly = guideOnly;
 
         // Rebuild the prompt string only when the target (or a door's state) changes.
-        if (item != h.item || door != h.door || btn != h.btn || (door != null && door.isOpen != h.doorWasOpen))
+        if (item != h.item || door != h.door || btn != h.btn || viaGuide != h.viaGuide ||
+            (door != null && door.isOpen != h.doorWasOpen))
         {
-            h.item = item; h.door = door; h.btn = btn;
+            h.item = item; h.door = door; h.btn = btn; h.viaGuide = viaGuide;
             h.doorWasOpen = door != null && door.isOpen;
             if (btn != null)       h.prompt = btn.prompt;
             else if (item != null) h.prompt = "[T1]  inspect " + item.displayName;
             else if (door != null) h.prompt = "[T1]  " + door.Prompt();
+            if (viaGuide && h.prompt != null) h.prompt += "\n[A] or aim at his head: talk to Haku";
         }
         if (item == null && door == null && btn == null) h.prompt = null;   // never leave a prompt up with nothing under the ray
-        h.aimPoint = end;
+        h.aimPoint = viaGuide ? labelAt : end;      // through Haku: the label sits on his front (drawn on top)
 
         if (btn != null) btn.hoverFrame = Time.frameCount;
 
@@ -472,10 +516,37 @@ public class VRInteractor : MonoBehaviour
 
         if (h.triggerDown)
         {
-            if (btn != null)       { if (guide != null) guide.Press(btn); h.consumed = true; }
-            else if (item != null) Pick(h, item);
-            else if (door != null) door.Toggle();
+            if (btn != null)
+            {
+                if (btn.kind != DocentButton.Kind.Panel)
+                {
+                    if (guide != null && FirstPress(btn)) guide.Press(btn);
+                    h.consumed = true;               // not also "put it back"
+                }
+            }
+            else if (item != null && held == null) Pick(h, item);    // (both triggers on the same frame: only one item)
+            else if (door != null) { if (FirstPress(door)) door.Toggle(); }
         }
+    }
+
+    /// Does the ray pass through Haku's head (the sphere at 1.52 m in MuseumGuide.BuildDocent)?
+    static bool AimsAtHead(Vector3 origin, Vector3 dir, Transform guide)
+    {
+        Vector3 headC = guide.TransformPoint(new Vector3(0f, 1.52f, 0f));
+        Vector3 v = headC - origin;
+        float along = Vector3.Dot(v, dir);
+        if (along <= 0f) return false;
+        return (v - dir * along).sqrMagnitude < 0.22f * 0.22f;
+    }
+
+    // Both hands pressing the same door or button within a moment count as one press (not open + close).
+    UnityEngine.Object lastPressed;
+    float lastPressTime = -10f;
+    bool FirstPress(UnityEngine.Object o)
+    {
+        if (o == lastPressed && Time.unscaledTime - lastPressTime < 0.3f) return false;
+        lastPressed = o; lastPressTime = Time.unscaledTime;
+        return true;
     }
 
     void Pick(Hand h, Inspectable item)
@@ -617,6 +688,8 @@ public class VRInteractor : MonoBehaviour
     }
 
     // ============================================================ text
+
+    const string HeldHint = "[T1] or [G1]  put it back";
 
     void ShowLabel(string text, Vector3 at)
     {
