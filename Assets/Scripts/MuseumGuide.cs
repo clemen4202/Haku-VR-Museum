@@ -42,6 +42,12 @@ public class MuseumGuide : MonoBehaviour
     public float openComfortAngle = 55f;    // ...or this far while its panel is open (so you can look across the buttons)
     public float viewAngle        = 55f;    // roughly the edge of the Quest 3 view: it only pops across a plinth/doorway once it is past this
 
+    public bool robotLook = true;           // added: small white robot (about half the old height); false = the original robed guide
+
+    /// Added: centre of Haku's head above his feet, for the "aim at his head" check in VRInteractor.
+    /// 1.52 m for the original robed guide; set lower when the robot is built.
+    public static float HeadHeight = 1.52f;
+
     /// Set by VRInteractor: what the visitor is holding right now (null if nothing).
     public Func<Inspectable> heldProvider;
 
@@ -240,6 +246,9 @@ public class MuseumGuide : MonoBehaviour
 
     void BuildDocent()
     {
+        if (robotLook) { BuildRobotDocent(); return; }   // added: the robot look (the original body below is kept)
+        HeadHeight = 1.52f;
+
         docent = new GameObject("Museum Guide (Haku)").transform;
 
         var robe  = Solid(new Color(0.62f, 0.22f, 0.16f));
@@ -263,6 +272,78 @@ public class MuseumGuide : MonoBehaviour
         // the whole character is one "talk to me" target
         var col = docent.gameObject.AddComponent<CapsuleCollider>();
         col.center = new Vector3(0f, 0.95f, 0f); col.radius = 0.3f; col.height = 1.9f;
+        bodyCollider   = col;
+        bodyRenderers  = docent.GetComponentsInChildren<Renderer>(true);
+        var b = docent.gameObject.AddComponent<DocentButton>();
+        b.kind = DocentButton.Kind.Talk; b.guide = this;
+        b.prompt = "[T1]  talk to Haku, the guide";
+        IgnorePlayer(col);
+    }
+
+    // ------------------------------------------------------------ added: robot body
+    // A small, cute white robot about 0.95 m tall (half the robed guide): big glossy helmet
+    // head, two large dark eyes with blue glows, dark ear pods, a little body with a glowing
+    // chest light, stubby arms and chunky boots. Faces +Z (the visitor), feet at local y = 0.
+    void BuildRobotDocent()
+    {
+        docent = new GameObject("Museum Guide (Haku)").transform;
+
+        var white = Solid(new Color(0.95f, 0.95f, 0.97f));
+        var grey  = Solid(new Color(0.55f, 0.57f, 0.60f));
+        var dark  = Solid(new Color(0.10f, 0.10f, 0.12f), 0.6f);
+        var eye   = Solid(new Color(0.06f, 0.06f, 0.08f), 0f);
+        var glow  = Solid(new Color(0.35f, 0.75f, 1.00f), 0f, new Color(0.20f, 0.55f, 1.00f));
+
+        // boots and legs
+        foreach (float sx in new[] { -1f, 1f })
+        {
+            string s = sx < 0 ? "L" : "R";
+            Part(docent, PrimitiveType.Cube,    "Sole" + s, new Vector3(sx * 0.075f, 0.010f, 0.020f), new Vector3(0.10f, 0.020f, 0.15f), dark);
+            Part(docent, PrimitiveType.Sphere,  "Boot" + s, new Vector3(sx * 0.075f, 0.045f, 0.020f), new Vector3(0.11f, 0.08f, 0.15f), white);
+            Part(docent, PrimitiveType.Capsule, "Leg"  + s, new Vector3(sx * 0.070f, 0.140f, 0f),     new Vector3(0.085f, 0.065f, 0.085f), white);
+            Part(docent, PrimitiveType.Sphere,  "Knee" + s, new Vector3(sx * 0.070f, 0.125f, 0.035f), new Vector3(0.045f, 0.045f, 0.025f), dark);
+        }
+
+        // body
+        Part(docent, PrimitiveType.Sphere,   "Hips",       new Vector3(0f, 0.225f, 0f),      new Vector3(0.17f, 0.07f, 0.13f), dark);
+        Part(docent, PrimitiveType.Sphere,   "Torso",      new Vector3(0f, 0.310f, 0f),      new Vector3(0.22f, 0.22f, 0.17f), white);
+        Part(docent, PrimitiveType.Sphere,   "ChestLight", new Vector3(-0.045f, 0.335f, 0.080f), new Vector3(0.030f, 0.030f, 0.015f), glow);
+        Part(docent, PrimitiveType.Cylinder, "Neck",       new Vector3(0f, 0.420f, 0f),      new Vector3(0.12f, 0.015f, 0.10f), dark);
+
+        // stubby arms
+        foreach (float sx in new[] { -1f, 1f })
+        {
+            string s = sx < 0 ? "L" : "R";
+            Part(docent, PrimitiveType.Sphere,  "Shoulder" + s, new Vector3(sx * 0.130f, 0.380f, 0f),    new Vector3(0.060f, 0.060f, 0.060f), dark);
+            Part(docent, PrimitiveType.Capsule, "Arm"      + s, new Vector3(sx * 0.150f, 0.330f, 0f),    new Vector3(0.055f, 0.045f, 0.055f), white);
+            Part(docent, PrimitiveType.Sphere,  "Hand"     + s, new Vector3(sx * 0.155f, 0.265f, 0.010f), new Vector3(0.050f, 0.050f, 0.040f), dark);
+        }
+
+        // big round head
+        const float hy = 0.620f;
+        Part(docent, PrimitiveType.Sphere, "Head", new Vector3(0f, hy, 0f), new Vector3(0.42f, 0.38f, 0.38f), white);
+        foreach (float sx in new[] { -1f, 1f })
+        {
+            string s = sx < 0 ? "L" : "R";
+            Part(docent, PrimitiveType.Sphere, "Eye" + s,     new Vector3(sx * 0.080f, hy - 0.030f, 0.165f), new Vector3(0.110f, 0.120f, 0.060f), eye);
+            Part(docent, PrimitiveType.Cube,   "EyeGlow" + s, new Vector3(sx * 0.080f, hy - 0.005f, 0.193f), new Vector3(0.050f, 0.012f, 0.010f), glow);
+            var ear = Part(docent, PrimitiveType.Cylinder, "Ear" + s, new Vector3(sx * 0.205f, hy, 0f), new Vector3(0.12f, 0.020f, 0.12f), dark);
+            ear.transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
+            var cap = Part(docent, PrimitiveType.Cylinder, "EarCap" + s, new Vector3(sx * 0.222f, hy, 0f), new Vector3(0.075f, 0.006f, 0.075f), grey);
+            cap.transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
+        }
+        HeadHeight = hy;
+
+        // name tag just above the head (text faces the visitor, see BuildDocent)
+        var tag = new GameObject("Tag").transform;
+        tag.SetParent(docent, false);
+        tag.localPosition = new Vector3(0f, 0.86f, 0f);
+        tag.localRotation = Quaternion.Euler(0f, 180f, 0f);
+        Text(tag, "Haku - guide", 0.04f, TextAnchor.LowerCenter, TextAlignment.Center, Vector3.zero, new Color(1f, 0.9f, 0.6f));
+
+        // the whole robot is one "talk to me" target
+        var col = docent.gameObject.AddComponent<CapsuleCollider>();
+        col.center = new Vector3(0f, 0.42f, 0f); col.radius = 0.22f; col.height = 0.84f;
         bodyCollider   = col;
         bodyRenderers  = docent.GetComponentsInChildren<Renderer>(true);
         var b = docent.gameObject.AddComponent<DocentButton>();

@@ -532,7 +532,7 @@ public class VRInteractor : MonoBehaviour
     /// Does the ray pass through Haku's head (the sphere at 1.52 m in MuseumGuide.BuildDocent)?
     static bool AimsAtHead(Vector3 origin, Vector3 dir, Transform guide)
     {
-        Vector3 headC = guide.TransformPoint(new Vector3(0f, 1.52f, 0f));
+        Vector3 headC = guide.TransformPoint(new Vector3(0f, MuseumGuide.HeadHeight, 0f));   // was 1.52 (robed guide)
         Vector3 v = headC - origin;
         float along = Vector3.Dot(v, dir);
         if (along <= 0f) return false;
