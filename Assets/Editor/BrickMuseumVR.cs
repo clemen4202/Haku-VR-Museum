@@ -84,6 +84,9 @@ public static class BrickMuseumVR
     const float PlinthSize   = 0.75f;
     const int   SwordRoom = 1;   // 1 = entry room
     const int   JarRoom   = 2;
+    const int   VaseRoom  = 3;   // added: Greek amphora
+    const int   SenetRoom = 4;   // added: Egyptian senet board
+    const int   DingRoom  = 5;   // added: Chinese bronze ding
     /// Unity's TextMesh reads from the opposite face on some versions.
     const bool  FlipPlacardText = true;
 
@@ -512,6 +515,8 @@ public static class BrickMuseumVR
         jar.transform.position = new Vector3(Rooms[ji].x, PlinthHeight, Rooms[ji].y);
         jar.transform.rotation = Quaternion.LookRotation(Approach[ji], Vector3.up);
         Placard(parent, "CANOPIC JAR", Rooms[ji], Approach[ji]);
+
+        BuildExtraExhibits(parent, inspectable);   // added: vase, senet board, ding
     }
 
     static GameObject BuildSword(Transform parent)
@@ -577,6 +582,165 @@ public static class BrickMuseumVR
             0.40f, new Vector3(10f, 0f, 0f));
 
         return jar;
+    }
+
+    // =========================================================================
+    //  ADDED EXHIBITS - Greek amphora (room 3), senet board (room 4),
+    //  bronze ding (room 5). Same pattern as the sword and jar: built from
+    //  primitives, one collider on the root, one Inspectable each.
+    // =========================================================================
+
+    static Material s_Terracotta, s_BlackGlaze, s_SenetWood, s_SenetInlay,
+                    s_Faience, s_Bronze, s_BronzeDark, s_DingInside;
+
+    static void CreateExtraMaterials()
+    {
+        s_Terracotta = Flat("M_VaseTerracotta", new Color(0.74f, 0.40f, 0.21f), 0f,    0.20f);
+        s_BlackGlaze = Flat("M_VaseBlackGlaze", new Color(0.07f, 0.06f, 0.06f), 0f,    0.55f);
+        s_SenetWood  = Flat("M_SenetWood",      new Color(0.47f, 0.31f, 0.17f), 0f,    0.25f);
+        s_SenetInlay = Flat("M_SenetInlay",     new Color(0.84f, 0.74f, 0.55f), 0f,    0.20f);
+        s_Faience    = Flat("M_SenetFaience",   new Color(0.16f, 0.46f, 0.58f), 0f,    0.45f);
+        s_Bronze     = Flat("M_DingBronze",     new Color(0.34f, 0.46f, 0.37f), 0.20f, 0.35f);
+        s_BronzeDark = Flat("M_DingBronzeDark", new Color(0.20f, 0.28f, 0.22f), 0.20f, 0.30f);
+        s_DingInside = Flat("M_DingInside",     new Color(0.08f, 0.09f, 0.08f), 0f,    0.10f);
+    }
+
+    static void BuildExtraExhibits(Transform parent, Type inspectable)
+    {
+        CreateExtraMaterials();
+
+        int vi = Mathf.Clamp(VaseRoom - 1, 0, Rooms.Length - 1);
+        var vase = BuildVase(parent, inspectable);
+        vase.transform.position = new Vector3(Rooms[vi].x, PlinthHeight, Rooms[vi].y);
+        vase.transform.rotation = Quaternion.LookRotation(Approach[vi], Vector3.up);
+        Placard(parent, "GREEK AMPHORA", Rooms[vi], Approach[vi]);
+
+        int bi = Mathf.Clamp(SenetRoom - 1, 0, Rooms.Length - 1);
+        var senet = BuildSenet(parent, inspectable);
+        senet.transform.position = new Vector3(Rooms[bi].x, PlinthHeight, Rooms[bi].y);
+        senet.transform.rotation = Quaternion.LookRotation(Approach[bi], Vector3.up);
+        Placard(parent, "SENET BOARD", Rooms[bi], Approach[bi]);
+
+        int di = Mathf.Clamp(DingRoom - 1, 0, Rooms.Length - 1);
+        var ding = BuildDing(parent, inspectable);
+        ding.transform.position = new Vector3(Rooms[di].x, PlinthHeight, Rooms[di].y);
+        ding.transform.rotation = Quaternion.LookRotation(Approach[di], Vector3.up);
+        Placard(parent, "BRONZE DING", Rooms[di], Approach[di]);
+    }
+
+    // ---- 1. Greek black-figure amphora (~0.42 m tall) -----------------------
+    static GameObject BuildVase(Transform parent, Type inspectable)
+    {
+        var vase = new GameObject("GreekAmphora");
+        vase.transform.SetParent(parent, false);
+
+        Part(vase, "Foot",        new Vector3(0f, 0.015f, 0f), new Vector3(0.110f, 0.015f, 0.110f), s_BlackGlaze, PrimitiveType.Cylinder);
+        Part(vase, "Stem",        new Vector3(0f, 0.045f, 0f), new Vector3(0.070f, 0.015f, 0.070f), s_BlackGlaze, PrimitiveType.Cylinder);
+        Part(vase, "Body",        new Vector3(0f, 0.190f, 0f), new Vector3(0.260f, 0.280f, 0.260f), s_Terracotta, PrimitiveType.Sphere);
+        Part(vase, "LowerBand",   new Vector3(0f, 0.100f, 0f), new Vector3(0.205f, 0.012f, 0.205f), s_BlackGlaze, PrimitiveType.Cylinder);
+        Part(vase, "FigureFront", new Vector3(0f, 0.195f,  0.127f), new Vector3(0.080f, 0.090f, 0.012f), s_BlackGlaze, PrimitiveType.Cube);
+        Part(vase, "FigureBack",  new Vector3(0f, 0.195f, -0.127f), new Vector3(0.080f, 0.090f, 0.012f), s_BlackGlaze, PrimitiveType.Cube);
+        Part(vase, "Neck",        new Vector3(0f, 0.360f, 0f), new Vector3(0.090f, 0.040f, 0.090f), s_BlackGlaze, PrimitiveType.Cylinder);
+        Part(vase, "Lip",         new Vector3(0f, 0.410f, 0f), new Vector3(0.130f, 0.012f, 0.130f), s_BlackGlaze, PrimitiveType.Cylinder);
+        Part(vase, "HandleL",     new Vector3(-0.085f, 0.335f, 0f), new Vector3(0.018f, 0.090f, 0.030f), s_BlackGlaze, PrimitiveType.Cube);
+        Part(vase, "HandleR",     new Vector3( 0.085f, 0.335f, 0f), new Vector3(0.018f, 0.090f, 0.030f), s_BlackGlaze, PrimitiveType.Cube);
+        Part(vase, "HandleTopL",  new Vector3(-0.068f, 0.375f, 0f), new Vector3(0.040f, 0.016f, 0.030f), s_BlackGlaze, PrimitiveType.Cube);
+        Part(vase, "HandleTopR",  new Vector3( 0.068f, 0.375f, 0f), new Vector3(0.040f, 0.016f, 0.030f), s_BlackGlaze, PrimitiveType.Cube);
+
+        var col = vase.AddComponent<BoxCollider>();
+        col.center = new Vector3(0f, 0.21f, 0f);
+        col.size   = new Vector3(0.28f, 0.43f, 0.27f);
+        Inspect(inspectable, vase, "Greek Amphora",
+            "Black-figure amphora, a two-handled storage jar made in Athens, c. 540-530 BCE. " +
+            "The figures were painted in a slip that fires black, with details scratched through " +
+            "to the red clay. Amphorae like this held wine or olive oil.",
+            0.60f, Vector3.zero);
+        return vase;
+    }
+
+    // ---- 2. Ancient Egyptian senet board (~0.42 m long) ---------------------
+    static GameObject BuildSenet(Transform parent, Type inspectable)
+    {
+        var board = new GameObject("SenetBoard");
+        board.transform.SetParent(parent, false);
+
+        Part(board, "Box",    new Vector3(0f,     0.030f, 0f), new Vector3(0.420f, 0.060f, 0.140f), s_SenetWood, PrimitiveType.Cube);
+        Part(board, "Drawer", new Vector3(0.212f, 0.030f, 0f), new Vector3(0.006f, 0.040f, 0.090f), s_Wood,      PrimitiveType.Cube);
+
+        // 30 squares in 3 rows of 10. Play snakes: row 1 left->right, row 2 back, row 3 forward.
+        // Squares 15 and 26-30 carry special signs on real boards, so they are painted blue.
+        const float pitch = 0.038f;
+        for (int n = 1; n <= 30; n++)
+        {
+            int row = (n - 1) / 10, col = (n - 1) % 10;
+            if (row == 1) col = 9 - col;
+            float x = (col - 4.5f) * pitch;
+            float z = (1 - row) * pitch;
+            bool special = n == 15 || n >= 26;
+            Part(board, "Square" + n, new Vector3(x, 0.0615f, z), new Vector3(0.034f, 0.003f, 0.034f),
+                 special ? s_Faience : s_SenetInlay, PrimitiveType.Cube);
+        }
+
+        // Starting position: the ten pieces alternate along the first ten squares.
+        for (int n = 1; n <= 10; n++)
+        {
+            float x = (n - 1 - 4.5f) * pitch;
+            float z = pitch;   // row 1
+            if (n % 2 == 1)
+                Part(board, "Cone" + ((n + 1) / 2),  new Vector3(x, 0.077f, z), new Vector3(0.020f, 0.014f, 0.020f), s_Faience, PrimitiveType.Capsule);
+            else
+                Part(board, "Spool" + (n / 2),       new Vector3(x, 0.073f, z), new Vector3(0.022f, 0.010f, 0.022f), s_Wood,    PrimitiveType.Cylinder);
+        }
+
+        var col2 = board.AddComponent<BoxCollider>();
+        col2.center = new Vector3(0f, 0.045f, 0f);
+        col2.size   = new Vector3(0.43f, 0.09f, 0.15f);
+        Inspect(inspectable, board, "Senet Board",
+            "Wooden senet board from Egypt, New Kingdom, c. 1550-1070 BCE. Two players raced " +
+            "cone- and spool-shaped pieces along thirty squares, moving by throwing casting sticks. " +
+            "Over time the game became linked with the soul's journey through the afterlife.",
+            0.55f, new Vector3(-50f, 0f, 0f));   // tilt the top towards the visitor
+        return board;
+    }
+
+    // ---- 3. Chinese bronze ding, Shang dynasty (~0.35 m tall) ---------------
+    static GameObject BuildDing(Transform parent, Type inspectable)
+    {
+        var ding = new GameObject("BronzeDing");
+        ding.transform.SetParent(parent, false);
+
+        // Three legs, evenly spaced.
+        for (int i = 0; i < 3; i++)
+        {
+            float a = (90f + i * 120f) * Mathf.Deg2Rad;
+            Part(ding, "Leg" + (i + 1), new Vector3(Mathf.Cos(a) * 0.08f, 0.075f, Mathf.Sin(a) * 0.08f),
+                 new Vector3(0.035f, 0.075f, 0.035f), s_Bronze, PrimitiveType.Cylinder);
+        }
+
+        Part(ding, "Bottom",   new Vector3(0f, 0.150f, 0f), new Vector3(0.240f, 0.100f, 0.240f), s_Bronze,     PrimitiveType.Sphere);
+        Part(ding, "Body",     new Vector3(0f, 0.210f, 0f), new Vector3(0.240f, 0.060f, 0.240f), s_Bronze,     PrimitiveType.Cylinder);
+        Part(ding, "MaskBand", new Vector3(0f, 0.235f, 0f), new Vector3(0.244f, 0.022f, 0.244f), s_BronzeDark, PrimitiveType.Cylinder);
+        Part(ding, "Rim",      new Vector3(0f, 0.275f, 0f), new Vector3(0.255f, 0.008f, 0.255f), s_Bronze,     PrimitiveType.Cylinder);
+        Part(ding, "Inside",   new Vector3(0f, 0.284f, 0f), new Vector3(0.220f, 0.002f, 0.220f), s_DingInside, PrimitiveType.Cylinder);
+
+        // Two upright 'ears' (handles) on the rim.
+        foreach (float sx in new[] { -1f, 1f })
+        {
+            string s = sx < 0 ? "L" : "R";
+            Part(ding, "EarPostA" + s, new Vector3(sx * 0.095f, 0.310f,  0.030f), new Vector3(0.014f, 0.070f, 0.014f), s_Bronze, PrimitiveType.Cube);
+            Part(ding, "EarPostB" + s, new Vector3(sx * 0.095f, 0.310f, -0.030f), new Vector3(0.014f, 0.070f, 0.014f), s_Bronze, PrimitiveType.Cube);
+            Part(ding, "EarTop"   + s, new Vector3(sx * 0.095f, 0.345f,  0f),     new Vector3(0.014f, 0.012f, 0.074f), s_Bronze, PrimitiveType.Cube);
+        }
+
+        var col = ding.AddComponent<BoxCollider>();
+        col.center = new Vector3(0f, 0.175f, 0f);
+        col.size   = new Vector3(0.27f, 0.35f, 0.27f);
+        Inspect(inspectable, ding, "Bronze Ding",
+            "Bronze ding, a three-legged ritual cauldron from the Shang dynasty, c. 13th-11th century BCE. " +
+            "Vessels like this held food offered to ancestors in ceremonies. The band below the rim " +
+            "carries a taotie mask design, and the green colour is corrosion of the bronze.",
+            0.60f, Vector3.zero);
+        return ding;
     }
 
     static void Inspect(Type t, GameObject go, string name, string desc, float dist, Vector3 rot)
