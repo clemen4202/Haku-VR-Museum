@@ -1,23 +1,26 @@
 # Haku VR Museum
 
 ## Team Name
+
 Haku
 
 ## Project
+
 AI-Powered VR Museum Experience
 
 ## Team Members
 
-| Member | Role |
-|---|---|
-| Clemen | Team Leader / Project Manager | 
-| Sneha | VR Developer | 
-| Ameen | AI Developer | 
-| Femin | Interaction & UI Developer | 
-| Mazin | 3D Environment Designer | 
-| Mahir | Research, Testing & Documentation | 
+| Member | Role                              |
+| ------ | --------------------------------- |
+| Clemen | Team Leader / Project Manager     |
+| Sneha  | VR Developer                      |
+| Ameen  | AI Developer                      |
+| Femin  | Interaction & UI Developer        |
+| Mazin  | 3D Environment Designer           |
+| Mahir  | Research, Testing & Documentation |
 
 ## Description
+
 An immersive virtual reality museum where users can explore exhibits and interact with an
 AI-powered museum guide to learn about artefacts through natural conversation.
 
@@ -84,34 +87,64 @@ briefly removed the main scene. So:
 
 ## Repository layout
 
-| Path | What it is |
-|---|---|
-| `Assets/`, `Packages/`, `ProjectSettings/` | The Unity 6 project (Quest 3, URP, OpenXR) |
-| `Assets/Scripts/` | Runtime C#: VR controls (`VRInteractor`), AI guide (`MuseumGuide`, Ollama), voice (`GuideVoice`, whisper.cpp + Windows voice), exhibits, doors |
-| `Assets/Resources/` | Shaders the scripts load at runtime (depth-tested text, guide colours) |
-| `Assets/Editor/` | Editor tooling: the museum generator (`BrickMuseumVR.cs`, menu **Brick Museum → Generate VR Museum**) |
-| `Assets/Scenes/` | Generated scenes — regenerate, do not hand-merge |
-| `ai-service/` | Legacy standalone AI service (FastAPI + faster-whisper + Piper) — **not used by the current Unity build** |
-| `ai-service/voices/` | Piper voice models — **downloaded, never committed** |
-| `docs/` | Setup guide, sprint plan, museum design, measured performance |
+| Path                                             | What it is                                                                                                                                           |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Assets/`, `Packages/`, `ProjectSettings/` | The Unity 6 project (Quest 3, URP, OpenXR)                                                                                                           |
+| `Assets/Scripts/`                              | Runtime C#: VR controls (`VRInteractor`), AI guide (`MuseumGuide`, Ollama), voice (`GuideVoice`, whisper.cpp + Windows voice), exhibits, doors |
+| `Assets/Resources/`                            | Shaders the scripts load at runtime (depth-tested text, guide colours)                                                                               |
+| `Assets/Editor/`                               | Editor tooling: the museum generator (`BrickMuseumVR.cs`, menu **Brick Museum → Generate VR Museum**)                                       |
+| `Assets/Scenes/`                               | Generated scenes — regenerate, do not hand-merge                                                                                                    |
+| `ai-service/`                                  | Legacy standalone AI service (FastAPI + faster-whisper + Piper) —**not used by the current Unity build**                                      |
+| `ai-service/voices/`                           | Piper voice models —**downloaded, never committed**                                                                                           |
+| `docs/`                                        | Setup guide, sprint plan, museum design, measured performance                                                                                        |
 
 ## Documentation
 
-| Document | Read it for |
-|---|---|
-| [docs/SETUP.md](docs/SETUP.md) | Getting your machine building to a Quest 3 from zero (written for the legacy `ai-service` layout; for the AI guide follow the quickstart below) |
-| [docs/SPRINT-1.md](docs/SPRINT-1.md) | Who is doing what in Weeks 4–6 |
-| [docs/DESIGN-museum.md](docs/DESIGN-museum.md) | Spatial design, poly budgets, comfort decisions |
-| [docs/MEASURED.md](docs/MEASURED.md) | Real benchmark numbers, not estimates |
-| [docs/STATUS.md](docs/STATUS.md) | Environment and build state as of Week 4 (describes the legacy `ai-service` setup) |
+| Document                                      | Read it for                                                                                                                                      |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [docs/SETUP.md](docs/SETUP.md)                 | Getting your machine building to a Quest 3 from zero (written for the legacy`ai-service` layout; for the AI guide follow the quickstart below) |
+| [docs/SPRINT-1.md](docs/SPRINT-1.md)           | Who is doing what in Weeks 4–6                                                                                                                  |
+| [docs/DESIGN-museum.md](docs/DESIGN-museum.md) | Spatial design, poly budgets, comfort decisions                                                                                                  |
+| [docs/MEASURED.md](docs/MEASURED.md)           | Real benchmark numbers, not estimates                                                                                                            |
+| [docs/STATUS.md](docs/STATUS.md)               | Environment and build state as of Week 4 (describes the legacy`ai-service` setup)                                                              |
 
 ---
+
+## New PC: from zero to running
+
+Git brings the project. Everything below has to be installed or set up on each PC once, in this
+order. Needs a VR-ready Windows 10/11 PC with an NVIDIA GPU (about 8 GB of GPU memory or more for
+`qwen3:8b`) and a Meta Quest 3 with a Link cable (or Air Link).
+
+1. **Install** [Git for Windows](https://git-scm.com/download/win) (includes Git LFS),
+   [Unity Hub](https://unity.com/download), [Ollama](https://ollama.com/download) and the
+   [Meta Horizon Link PC app](https://www.meta.com/quest/setup/) (formerly the Oculus / Meta Quest Link app).
+2. **Clone** (LFS first, see the rules above):
+
+   ```powershell
+   git lfs install
+   git clone https://github.com/clemen4202/Haku-VR-Museum.git
+   ```
+3. **Unity**: in Unity Hub install editor **6000.5.5f1** exactly (Android Build Support only if you
+   will build an APK), then add and open the cloned folder. The first import takes a while.
+4. **Quest Link**: open the Meta Horizon Link app, sign in, connect the headset (USB cable or Air
+   Link) and enable Link in the headset. Then in the app: **Settings → General → OpenXR Runtime**
+   and make Meta Horizon Link the active runtime. Without this Unity cannot see the headset and the
+   game starts the desktop (keyboard and mouse) player instead.
+5. **AI guide and voice**: follow the quickstart below — `ollama pull qwen3:8b`, the whisper.cpp
+   server and its model, microphone permission.
+6. **Play**: start Ollama and `whisper-server`, put the headset on with Link active, open
+   `Assets/Scenes/BrickMuseum_VR.unity` and press **Play**. The Console should show
+   `[RigSelector] Headset detected` and, after the first load, `[MuseumGuide] Ollama model 'qwen3:8b' is loaded and ready.`
+
+If something does not work: the Console shows a `[RigSelector]`, `[MuseumGuide]` or `[GuideVoice]`
+line saying why, and Haku says so on his panel.
 
 ## Quickstart — the AI guide and voice (current build)
 
 Everything runs on the same Windows PC as Unity. Nothing is sent to the internet.
 
-**1. Ollama (the guide's brain)** — install from <https://ollama.com/download>, then:
+**1. Ollama (the guide's brain)** — install from [https://ollama.com/download](https://ollama.com/download), then:
 
 ```powershell
 ollama pull qwen3:8b
@@ -125,11 +158,11 @@ demo, wait for the Console line `[MuseumGuide] Ollama model 'qwen3:8b' is loaded
 
 **2. whisper.cpp (speech-to-text for "hold A to talk")**
 
-1. From <https://github.com/ggml-org/whisper.cpp/releases> download `whisper-bin-x64.zip` from the
+1. From [https://github.com/ggml-org/whisper.cpp/releases](https://github.com/ggml-org/whisper.cpp/releases) download `whisper-bin-x64.zip` from the
    newest release that has it, and unzip it (e.g. to `C:\whisper`). It unzips into a `Release`
    folder that contains `whisper-server.exe`.
 2. Download the model `ggml-base.en.bin` from
-   <https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin> into that same
+   [https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin) into that same
    `Release` folder, next to `whisper-server.exe`.
 3. Start the server from the `Release` folder and leave the window open while you play:
 
@@ -137,8 +170,12 @@ demo, wait for the Console line `[MuseumGuide] Ollama model 'qwen3:8b' is loaded
    cd C:\whisper\Release
    .\whisper-server.exe -m ggml-base.en.bin --host 127.0.0.1 --port 8080
    ```
-
 4. Check it is listening: `Test-NetConnection 127.0.0.1 -Port 8080` should say `TcpTestSucceeded : True`.
+5. If `whisper-server.exe` will not start and mentions a missing `VCRUNTIME140.dll` / `MSVCP140.dll`,
+   install the [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+
+Haku's spoken answers use the Windows built-in voice, so the PC needs an English voice installed
+(normally there already: Settings → Time & language → Speech → Manage voices).
 
 **3. Microphone** — Windows Settings → Privacy & security → Microphone → allow desktop apps. With
 Quest Link the headset mic ("Headset Microphone (Oculus Virtual Audio Device)") is picked
@@ -152,14 +189,14 @@ running, Haku says so on its panel and the Console shows a `[MuseumGuide]` or `[
 
 ### Controls in the headset
 
-| Control | Action |
-|---|---|
-| Left stick | Walk |
-| Right stick | Snap turn |
+| Control                | Action                                                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Left stick             | Walk                                                                                                                                                      |
+| Right stick            | Snap turn                                                                                                                                                 |
 | **T1** (trigger) | Point and press: pick up an exhibit, open/close a door, press a panel button, talk to Haku (aim at his head when he stands in front of a door or exhibit) |
-| **G1** (grip) | Put the held exhibit back |
-| **A** (right) | Hold and ask Haku out loud; let go to send |
-| **X** (left) | Show / hide the debug readout (fps, controller state) |
+| **G1** (grip)    | Put the held exhibit back                                                                                                                                 |
+| **A** (right)    | Hold and ask Haku out loud; let go to send                                                                                                                |
+| **X** (left)     | Show / hide the debug readout (fps, controller state)                                                                                                     |
 
 ## Legacy — the standalone AI service (not used by the current Unity build)
 
@@ -205,9 +242,11 @@ Ollama, speech recognition and the voice must all report ready.
 
 1. Open the **repository root folder** in Unity Hub with **Unity 6000.5.5f1**.
 2. Let the package resolve finish completely before touching anything.
-3. Menu: **Brick Museum → Generate VR Museum**
+3. Open `Assets/Scenes/BrickMuseum_VR.unity` — it is already generated and committed, so to just
+   run the museum you can skip to step 4. Only regenerate (menu **Brick Museum → Generate VR
+   Museum**) if the scene is missing or you changed the generator.
 
-   Builds the whole scene from code — floor, five galleries, corridors, doorways, brick and tile
+   The generator builds the whole scene from code — floor, five galleries, corridors, doorways, brick and tile
    materials with size-derived tiling, ceiling, lighting, plinths, exhibits and hinged doors — and
    saves it to `Assets/Scenes/BrickMuseum_VR.unity`. Re-running is safe: it rebuilds in place.
 4. **Window → Rendering → Lighting → Generate Lighting**
@@ -219,17 +258,17 @@ Ollama, speech recognition and the voice must all report ready.
 
 ## Quickstart — building to the Quest 3
 
-| Setting | Value |
-|---|---|
-| Platform | Android (**File → Build Profiles → Switch Platform**) |
-| Scripting Backend | IL2CPP |
-| Target Architectures | ARM64 only |
-| Minimum API Level | 32 |
-| Graphics APIs | Vulkan only (untick Auto) |
-| Color Space | Linear |
-| Texture Compression | ASTC |
-| XR Plug-in Management → Android | OpenXR |
-| OpenXR → Android | Oculus Touch Controller Profile + **Meta Quest** feature group |
+| Setting                          | Value                                                               |
+| -------------------------------- | ------------------------------------------------------------------- |
+| Platform                         | Android (**File → Build Profiles → Switch Platform**)       |
+| Scripting Backend                | IL2CPP                                                              |
+| Target Architectures             | ARM64 only                                                          |
+| Minimum API Level                | 32                                                                  |
+| Graphics APIs                    | Vulkan only (untick Auto)                                           |
+| Color Space                      | Linear                                                              |
+| Texture Compression              | ASTC                                                                |
+| XR Plug-in Management → Android | OpenXR                                                              |
+| OpenXR → Android                | Oculus Touch Controller Profile +**Meta Quest** feature group |
 
 Quest in developer mode, connected by USB, headset unlocked, USB debugging accepted, then
 **Build and Run**.
@@ -242,13 +281,13 @@ Quest in developer mode, connected by USB, headset unlocked, USB debugging accep
 
 ## Service API (legacy `ai-service`)
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /health` | Readiness of Ollama, speech recognition and the voice |
-| `GET /exhibits` | All loaded exhibit records |
-| `POST /ask` | Text question in, text answer out — lets Unity be tested with no audio at all |
-| `POST /converse` | Audio + `exhibit_id` + `held` + `distance_m` in; spoken WAV out with `X-Haku-*` timing headers |
-| `POST /say` | Speech synthesis only, for pre-rendering exhibit introductions |
+| Endpoint           | Purpose                                                                                               |
+| ------------------ | ----------------------------------------------------------------------------------------------------- |
+| `GET /health`    | Readiness of Ollama, speech recognition and the voice                                                 |
+| `GET /exhibits`  | All loaded exhibit records                                                                            |
+| `POST /ask`      | Text question in, text answer out — lets Unity be tested with no audio at all                        |
+| `POST /converse` | Audio +`exhibit_id` + `held` + `distance_m` in; spoken WAV out with `X-Haku-*` timing headers |
+| `POST /say`      | Speech synthesis only, for pre-rendering exhibit introductions                                        |
 
 Try it without a headset:
 
@@ -280,14 +319,14 @@ To add an exhibit: drop a new JSON record in, restart the service, and set the m
 
 ## Technology
 
-| Layer | Choice | Licence |
-|---|---|---|
-| Engine | Unity 6000.5.5f1, URP 17.5 | Unity Personal (free) |
-| XR | OpenXR 1.17.1, XR Interaction Toolkit 3.6 | Unity Companion |
-| Speech to text | whisper.cpp server (`ggml-base.en`) — legacy `ai-service`: faster-whisper | MIT |
-| Language model | Ollama + `qwen3:8b` | MIT (Ollama) / Apache 2.0 (Qwen3) |
-| Text to speech | Windows built-in voice (System.Speech) — legacy `ai-service`: Piper ([OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl)) | Part of Windows / **GPL-3.0** (Piper) |
-| 3D content | Blender | GPL |
+| Layer          | Choice                                                                                                                                 | Licence                                    |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| Engine         | Unity 6000.5.5f1, URP 17.5                                                                                                             | Unity Personal (free)                      |
+| XR             | OpenXR 1.17.1, XR Interaction Toolkit 3.6                                                                                              | Unity Companion                            |
+| Speech to text | whisper.cpp server (`ggml-base.en`) — legacy `ai-service`: faster-whisper                                                         | MIT                                        |
+| Language model | Ollama +`qwen3:8b`                                                                                                                   | MIT (Ollama) / Apache 2.0 (Qwen3)          |
+| Text to speech | Windows built-in voice (System.Speech) — legacy`ai-service`: Piper ([OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl)) | Part of Windows /**GPL-3.0** (Piper) |
+| 3D content     | Blender                                                                                                                                | GPL                                        |
 
 Every component is free and self-hosted. Total running cost: **$0**.
 
@@ -296,11 +335,11 @@ Every component is free and self-hosted. Total running cost: **$0**.
 Benchmarked on the team's dev laptop (RTX 3070 Ti Laptop, i9-12900H) using the legacy `ai-service`
 pipeline. Full detail in [docs/MEASURED.md](docs/MEASURED.md).
 
-| Stage | Warm |
-|---|---|
-| Speech to text | ~580 ms |
-| Language model | ~780 ms |
-| Text to speech | ~330 ms |
+| Stage                            | Warm                   |
+| -------------------------------- | ---------------------- |
+| Speech to text                   | ~580 ms                |
+| Language model                   | ~780 ms                |
+| Text to speech                   | ~330 ms                |
 | **Full spoken round trip** | **1.6 – 1.9 s** |
 
 The target is under 1.5 s. Streaming the model output into sentence-level speech synthesis, plus
@@ -313,12 +352,12 @@ answer sooner. For a two-sentence museum answer that trade is not worth it.
 
 ## Known issues
 
-| Issue | Detail | When |
-|---|---|---|
-| Grounding drift under register change | Asked to explain "like I'm nine", the guide added detail not in the record — colourful grapes, big strong lions. Small, plausible, and exactly the drift a museum guide cannot afford. | Weeks 10–11 |
-| Response time above target (legacy `ai-service`) | 1.6–1.9 s against a 1.5 s target; speech recognition is the largest single cost. The current Unity pipeline has not been timed; its Windows voice takes about 1 s to start speaking | Week 10 |
-| Content behind (legacy `ai-service`) | 1 of 8 exhibit records written; sources still placeholders | Weeks 9–10 |
-| VRAM headroom | The language model takes about 5.2 GB of an 8 GB GPU alongside VR rendering (speech recognition now runs on the CPU) | To verify under load |
+| Issue                                             | Detail                                                                                                                                                                                  | When                 |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| Grounding drift under register change             | Asked to explain "like I'm nine", the guide added detail not in the record — colourful grapes, big strong lions. Small, plausible, and exactly the drift a museum guide cannot afford. | Weeks 10–11         |
+| Response time above target (legacy`ai-service`) | 1.6–1.9 s against a 1.5 s target; speech recognition is the largest single cost. The current Unity pipeline has not been timed; its Windows voice takes about 1 s to start speaking    | Week 10              |
+| Content behind (legacy`ai-service`)             | 1 of 8 exhibit records written; sources still placeholders                                                                                                                              | Weeks 9–10          |
+| VRAM headroom                                     | The language model takes about 5.2 GB of an 8 GB GPU alongside VR rendering (speech recognition now runs on the CPU)                                                                    | To verify under load |
 
 ---
 
